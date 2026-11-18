@@ -11,5 +11,5 @@ if [ ! -d .venv ]; then
 else
   source .venv/bin/activate
 fi
-[ -f config.yaml ] || cp config.example.yaml config.yaml
+[ -f config.yaml ] || python -m clipper setup
 exec python -m clipper "$@"

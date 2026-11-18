@@ -176,7 +176,63 @@ def cmd_check(cfg: dict, _args) -> None:
     print(f"○ Daten-Ordner: {cfg['data_dir']}")
 
 
+def cmd_setup(args) -> None:
+    """Einrichtungsassistent: config.yaml anlegen, Dashboard-Passwort setzen, Streamer eintragen."""
+    import getpass
+    import re
+
+    from .platforms import detect_platform
+
+    cfg_path = Path(args.config or "config.yaml")
+    print("\n=== GTA Clipper – Einrichtung ===\n")
+    if not cfg_path.exists():
+        example = Path(__file__).resolve().parent.parent / "config.example.yaml"
+        shutil.copyfile(example, cfg_path)
+        print(f"✓ {cfg_path} angelegt")
+    text = cfg_path.read_text(encoding="utf-8")
+    if re.search(r'^\s*password:\s*""', text, re.MULTILINE):
+        print("Passwort für das Dashboard (damit nur ihr im WLAN Clips hochladen könnt).")
+        print("Benutzername beim Login ist egal. Leer lassen = kein Passwort.")
+        pw = getpass.getpass("Passwort (Eingabe bleibt unsichtbar): ").strip()
+        if pw:
+            safe = pw.replace("\\", "\\\\").replace('"', '\\"')
+            text = re.sub(r'^(\s*password:\s*)""', lambda m: f'{m.group(1)}"{safe}"', text, count=1,
+                          flags=re.MULTILINE)
+            cfg_path.write_text(text, encoding="utf-8")
+            print("✓ Passwort gespeichert")
+    cfg = load_config(str(cfg_path))
+    setup_logging(cfg["data_dir"])
+    db = _db(cfg)
+    existing = db.list_streamers()
+    if existing:
+        print("\nBereits eingetragen: " + ", ".join(s["name"] for s in existing))
+    print("\nStreamer-URLs eingeben (Twitch, YouTube oder Kick), eine pro Zeile. Leere Zeile = fertig.")
+    while True:
+        url = input("URL: ").strip()
+        if not url:
+            break
+        try:
+            platform, channel, norm = detect_platform(url)
+        except ValueError as exc:
+            print(f"  ✗ {exc}")
+            continue
+        name = input(f"  Anzeigename [{channel}]: ").strip() or channel
+        if db.get_streamer_by_name(name):
+            print(f"  ○ {name} gibt es schon")
+            continue
+        db.add_streamer(name, norm, platform, channel)
+        print(f"  ✓ {name} ({platform})")
+    print("\n=== Prüfe Installation ===")
+    cmd_check(cfg, args)
+    print("\nFertig! Ab jetzt einfach start.bat (Windows) bzw. ./start.sh (Mac) starten.\n")
+
+
 def main(argv: list[str] | None = None) -> None:
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(errors="replace")  # Windows-Konsolen ohne UTF-8 nicht abstürzen lassen
+        except (AttributeError, ValueError):
+            pass
     p = argparse.ArgumentParser(prog="python -m clipper", description="GTA Clipping-Dienst")
     p.add_argument("--config", "-c", help="Pfad zur config.yaml")
     sub = p.add_subparsers(dest="cmd")
@@ -198,8 +254,15 @@ def main(argv: list[str] | None = None) -> None:
     c.add_argument("--manual", action="store_true", help="YouTube: Login ohne lokalen Browser")
     c.add_argument("--token", help="Instagram Access Token")
     sub.add_parser("check", help="Installation prüfen")
+    sub.add_parser("setup", help="Einrichtungsassistent (Passwort, Streamer, Prüfung)")
     args = p.parse_args(argv)
 
+    if args.cmd == "setup":
+        try:
+            cmd_setup(args)
+        except (KeyboardInterrupt, EOFError):
+            print("\nAbgebrochen.")
+        return
     cfg = load_config(args.config)
     setup_logging(cfg["data_dir"])
     handlers = {"run": cmd_run, "add": cmd_add, "list": cmd_list, "remove": cmd_remove, "vod": cmd_vod,
