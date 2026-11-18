@@ -17,7 +17,7 @@ from .db import DB
 from .detector import Detector
 from .platforms import LiveInfo, Platform
 from .signals import MediaAnalyzer, Timeline
-from .util import NO_WINDOW, ffmpeg_bin, probe, run, slugify
+from .util import NO_WINDOW, ffmpeg_bin, popen_guarded, probe, run, slugify
 
 log = logging.getLogger("clipper.session")
 
@@ -35,6 +35,42 @@ def concat_line(path: Path) -> str:
     """Zeile für eine ffmpeg-concat-Liste (einfache Anführungszeichen korrekt escapen)."""
     escaped = path.resolve().as_posix().replace("'", "'\\''")
     return f"file '{escaped}'\n"
+
+
+def cleanup_buffer(cfg: dict, idle_seconds: float = 120) -> tuple[int, int]:
+    """Puffer-Ordner nicht sauber beendeter Sessions löschen (nach Absturz). Gedacht für den Start, wenn noch keine
+    Session läuft. Ordner, in die gerade noch geschrieben wird, bleiben stehen. Rückgabe: (gelöscht, Bytes frei)."""
+    root = data_path(cfg, "buffer")
+    if not root.is_dir():
+        return 0, 0
+    now, removed, freed, busy = time.time(), 0, 0, []
+    for streamer_dir in [p for p in root.iterdir() if p.is_dir()]:
+        for sess in [p for p in streamer_dir.iterdir() if p.is_dir()]:
+            newest, size = sess.stat().st_mtime, 0
+            for f in sess.rglob("*"):
+                try:
+                    st = f.stat()
+                except OSError:
+                    continue
+                newest = max(newest, st.st_mtime)
+                size += st.st_size if f.is_file() else 0
+            if now - newest < idle_seconds:
+                busy.append(sess)
+                continue
+            shutil.rmtree(sess, ignore_errors=True)
+            if not sess.exists():
+                removed += 1
+                freed += size
+        try:
+            streamer_dir.rmdir()  # nur wenn leer
+        except OSError:
+            pass
+    if removed:
+        log.info("Alte Puffer aufgeräumt: %d Ordner, %.0f MB frei", removed, freed / 1e6)
+    for sess in busy:
+        log.warning("Puffer %s wird noch beschrieben – läuft eine alte Aufnahme (ffmpeg/streamlink) weiter? "
+                    "Ggf. im Task-Manager beenden.", sess)
+    return removed, freed
 
 
 @dataclass
@@ -64,13 +100,14 @@ class Recorder:
               *self.platform.ffmpeg_input_args(self.info),
               "-map", "0:v:0", "-map", "0:a:0?", "-c", "copy", "-f", "segment", "-segment_time", seg,
               "-segment_list", "list.csv", "-segment_list_type", "csv", "-reset_timestamps", "1", "seg_%06d.ts"]
+        # popen_guarded: stirbt der Clipper (Absturz/Task-Manager), beendet Windows auch streamlink und ffmpeg –
+        # sonst würden sie endlos Segmente schreiben, die niemand mehr löscht.
         if src_cmd:
-            self.p1 = subprocess.Popen(src_cmd, stdout=subprocess.PIPE, stderr=logf, creationflags=NO_WINDOW)
-            self.p2 = subprocess.Popen(ff, stdin=self.p1.stdout, stderr=logf, cwd=self.dir, creationflags=NO_WINDOW)
+            self.p1 = popen_guarded(src_cmd, stdout=subprocess.PIPE, stderr=logf, creationflags=NO_WINDOW)
+            self.p2 = popen_guarded(ff, stdin=self.p1.stdout, stderr=logf, cwd=self.dir, creationflags=NO_WINDOW)
             self.p1.stdout.close()  # type: ignore[union-attr]
         else:
-            self.p2 = subprocess.Popen(ff, stdin=subprocess.DEVNULL, stderr=logf, cwd=self.dir,
-                                       creationflags=NO_WINDOW)
+            self.p2 = popen_guarded(ff, stdin=subprocess.DEVNULL, stderr=logf, cwd=self.dir, creationflags=NO_WINDOW)
         logf.close()
 
     def alive(self) -> bool:

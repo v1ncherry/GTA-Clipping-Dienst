@@ -52,6 +52,92 @@ def ffprobe_bin(cfg: dict) -> str:
     return shutil.which(cfg.get("ffprobe", "ffprobe")) or cfg.get("ffprobe", "ffprobe")
 
 
+_JOB_LOCK = threading.Lock()
+_JOB: int | None = None  # Windows-Job „Kinder sterben mit“ – Handle bleibt bis zum Prozessende offen
+_WIN = None
+
+
+def _win_api():
+    global _WIN
+    if _WIN is None:
+        import ctypes
+        from ctypes import wintypes
+
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        k32.CreateJobObjectW.restype = wintypes.HANDLE
+        k32.CreateJobObjectW.argtypes = [ctypes.c_void_p, wintypes.LPCWSTR]
+        k32.SetInformationJobObject.argtypes = [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD]
+        k32.AssignProcessToJobObject.argtypes = [wintypes.HANDLE, wintypes.HANDLE]
+        k32.CloseHandle.argtypes = [wintypes.HANDLE]
+        ntdll = ctypes.WinDLL("ntdll")
+        ntdll.NtResumeProcess.argtypes = [wintypes.HANDLE]
+        ntdll.NtResumeProcess.restype = ctypes.c_long
+        _WIN = (ctypes, k32, ntdll)
+    return _WIN
+
+
+def _kill_on_close_job() -> int:
+    """Job mit JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE: Endet der Clipper – auch per Absturz oder Task-Manager –,
+    schließt Windows das (nicht vererbte) Job-Handle und beendet alle Prozesse im Job."""
+    global _JOB
+    with _JOB_LOCK:
+        if _JOB is None:
+            ctypes, k32, _ntdll = _win_api()
+            from ctypes import wintypes
+
+            class Basic(ctypes.Structure):
+                _fields_ = [("PerProcessUserTimeLimit", ctypes.c_int64), ("PerJobUserTimeLimit", ctypes.c_int64),
+                            ("LimitFlags", wintypes.DWORD), ("MinimumWorkingSetSize", ctypes.c_size_t),
+                            ("MaximumWorkingSetSize", ctypes.c_size_t), ("ActiveProcessLimit", wintypes.DWORD),
+                            ("Affinity", ctypes.c_size_t), ("PriorityClass", wintypes.DWORD),
+                            ("SchedulingClass", wintypes.DWORD)]
+
+            class Extended(ctypes.Structure):
+                _fields_ = [("BasicLimitInformation", Basic), ("IoInfo", ctypes.c_uint64 * 6),
+                            ("ProcessMemoryLimit", ctypes.c_size_t), ("JobMemoryLimit", ctypes.c_size_t),
+                            ("PeakProcessMemoryUsed", ctypes.c_size_t), ("PeakJobMemoryUsed", ctypes.c_size_t)]
+
+            job = k32.CreateJobObjectW(None, None)
+            if not job:
+                raise OSError(ctypes.get_last_error(), "CreateJobObject fehlgeschlagen")
+            info = Extended()
+            info.BasicLimitInformation.LimitFlags = 0x2000  # JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+            if not k32.SetInformationJobObject(job, 9, ctypes.byref(info), ctypes.sizeof(info)):  # Extended = 9
+                err = ctypes.get_last_error()
+                k32.CloseHandle(job)
+                raise OSError(err, "SetInformationJobObject fehlgeschlagen")
+            _JOB = job
+        return _JOB
+
+
+def popen_guarded(cmd: list[str], **kw) -> subprocess.Popen:
+    """Wie subprocess.Popen – unter Windows aber an einen Job gebunden, damit der Prozess samt seinen Kindern
+    (z.B. python -m streamlink → Python-Prozess) mit dem Clipper stirbt. Sonst laufen streamlink/ffmpeg nach einem
+    Absturz weiter und füllen den Puffer-Ordner endlos (~4 GB/h pro Streamer).
+
+    Nur für Prozesse, die nicht länger leben dürfen als der Clipper – nie für Browser o.ä.
+    Der Prozess startet angehalten und läuft erst los, wenn er im Job ist (sonst könnten Enkel entwischen).
+    """
+    if not IS_WINDOWS:
+        return subprocess.Popen(cmd, **kw)
+    kw["creationflags"] = kw.get("creationflags", 0) | 0x00000004  # CREATE_SUSPENDED
+    proc = subprocess.Popen(cmd, **kw)
+    handle = int(proc._handle)  # type: ignore[attr-defined]
+    try:
+        ctypes, k32, ntdll = _win_api()
+        if not k32.AssignProcessToJobObject(_kill_on_close_job(), handle):
+            log.warning("Prozess %s nicht an den Job gebunden (Fehler %d) – läuft nach Absturz evtl. weiter",
+                        cmd[0], ctypes.get_last_error())
+    except Exception as exc:  # noqa: BLE001
+        log.warning("Prozess %s nicht an den Job gebunden: %s", cmd[0], exc)
+    finally:
+        status = _win_api()[2].NtResumeProcess(handle)
+        if status != 0:
+            proc.kill()
+            raise OSError(f"Prozess {cmd[0]} ließ sich nicht starten (NtResumeProcess 0x{status & 0xFFFFFFFF:08X})")
+    return proc
+
+
 def run(cmd: list[str], timeout: float | None = None, check: bool = True, **kw) -> subprocess.CompletedProcess:
     log.debug("run: %s", " ".join(map(str, cmd)))
     proc = subprocess.run(cmd, capture_output=True, timeout=timeout, creationflags=NO_WINDOW, **kw)

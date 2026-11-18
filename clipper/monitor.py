@@ -11,7 +11,7 @@ from pathlib import Path
 from .config import streamer_config
 from .db import DB
 from .platforms import Platform, make_platform
-from .session import LiveSession, matches_keywords
+from .session import LiveSession, cleanup_buffer, matches_keywords
 
 log = logging.getLogger("clipper.monitor")
 
@@ -32,6 +32,10 @@ class Orchestrator:
         self.thread: threading.Thread | None = None
 
     def start(self) -> None:
+        try:  # Reste eines Absturzes (Ringpuffer ohne Session) wegräumen, bevor neue Sessions starten
+            cleanup_buffer(self.cfg)
+        except Exception:  # noqa: BLE001
+            log.exception("Aufräumen des Puffers fehlgeschlagen")
         self.thread = threading.Thread(target=self._loop, name="orchestrator", daemon=True)
         self.thread.start()
 

@@ -196,6 +196,8 @@ Alle Gewichte, Emote-Listen und Schwellen stehen in `clipper/config.py` und kön
   oder Stummschaltungen auslösen. Clips mit lauter Radio-Musik vor dem Upload kurz checken.
 - Speicherbedarf: ca. 1 GB Puffer pro aktivem Streamer + ca. 20–40 MB pro fertigem Clip.
   Verworfene Clips werden gelöscht.
+- Absturz oder im Task-Manager beendet: Unter Windows enden die Aufnahmen (streamlink/ffmpeg) automatisch mit,
+  liegengebliebene Puffer-Ordner werden beim nächsten Start gelöscht.
 - Logs: `data/logs/clipper.log`, Aufnahme-Logs pro Session in `data/buffer/…/capture.log`.
 
 ## Fehlersuche

@@ -182,3 +182,58 @@ def test_desktop_login_sets_cookie_and_password_still_protects(tmp_path):
         assert c.get("/api/status").status_code == 200  # Cookie aus der Weiterleitung
     with TestClient(app) as c2:
         assert c2.get("/api/info", auth=("x", "geheim")).json()["password"] is True
+
+
+def test_cleanup_buffer_removes_only_stale_sessions(tmp_path):
+    import os
+    import time
+
+    from clipper.session import cleanup_buffer
+
+    cfg = deep_merge(DEFAULTS, {"data_dir": str(tmp_path)})
+    buf = tmp_path / "buffer"
+    old, fresh = buf / "luca" / "20260101-120000", buf / "vice" / "20260101-130000"
+    for d in (old, fresh):
+        (d / "part0").mkdir(parents=True)
+        (d / "part0" / "seg_000001.ts").write_bytes(b"x" * 1000)
+    (buf / "calib-luca.jpg").write_bytes(b"jpg")
+    past = time.time() - 3600
+    for p in [old, *old.rglob("*")]:
+        os.utime(p, (past, past))
+    removed, freed = cleanup_buffer(cfg)
+    assert (removed, freed) == (1, 1000)
+    assert not old.exists() and not (buf / "luca").exists()  # leerer Streamer-Ordner gleich mit weg
+    assert (fresh / "part0" / "seg_000001.ts").exists()  # wird noch beschrieben -> bleibt
+    assert (buf / "calib-luca.jpg").exists()
+
+
+@pytest.mark.skipif(not __import__("sys").platform.startswith("win"), reason="Windows-Job nur unter Windows")
+def test_guarded_children_die_when_clipper_is_killed():
+    """Harter Absturz: Kindprozesse aus popen_guarded (auch deren Kinder) dürfen nicht weiterlaufen."""
+    import ctypes
+    import os
+    import sys
+    from pathlib import Path
+
+    root = str(Path(__file__).resolve().parent.parent)
+    helper_code = (
+        "import os, sys, time; sys.path.insert(0, sys.argv[1]);"
+        "from clipper.util import popen_guarded, NO_WINDOW;"
+        "c = popen_guarded([sys.executable, '-c', 'import time; time.sleep(30)'], creationflags=NO_WINDOW);"
+        "print(os.getpid(), c.pid, flush=True); time.sleep(30)"
+    )
+    helper = subprocess.Popen([sys.executable, "-c", helper_code, root], stdout=subprocess.PIPE, text=True)
+    try:
+        interp_pid, child_pid = map(int, helper.stdout.readline().split())
+        subprocess.run(["taskkill", "/F", "/PID", str(interp_pid)], capture_output=True, check=True)
+        k32 = ctypes.WinDLL("kernel32")
+        k32.OpenProcess.restype = ctypes.c_void_p
+        h = k32.OpenProcess(0x00100000, False, child_pid)  # SYNCHRONIZE
+        if h:  # Prozess existiert noch -> muss innerhalb von 5 s enden
+            try:
+                assert k32.WaitForSingleObject(ctypes.c_void_p(h), 5000) == 0, "Kindprozess lebt nach dem Kill weiter"
+            finally:
+                k32.CloseHandle(ctypes.c_void_p(h))
+    finally:
+        helper.kill()
+        assert os.getpid()  # nichts weiter aufzuräumen: das Kind stirbt mit dem Job
