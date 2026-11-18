@@ -10,9 +10,10 @@ import time
 from pathlib import Path
 
 from fastapi import Body, FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 
+from .. import __version__
 from ..config import data_path
 from ..db import DB
 from ..platforms import detect_platform
@@ -24,13 +25,42 @@ log = logging.getLogger("clipper.web")
 STATIC = Path(__file__).parent / "static"
 
 
-def create_app(cfg: dict, db: DB, orchestrator, processor, uploader) -> FastAPI:
+DESKTOP_COOKIE = "clipper_desktop"
+
+
+def desktop_token(cfg: dict) -> str:
+    """Geheimer Schlüssel für das Programmfenster (desktop.py), damit es ohne Passwortabfrage reinkommt.
+
+    Liegt in data/secrets – wer diese Datei lesen kann, kann auch config.yaml (mit dem Passwort) lesen.
+    """
+    path = data_path(cfg, "secrets") / "desktop.token"
+    try:
+        token = path.read_text(encoding="utf-8").strip()
+        if len(token) >= 32:
+            return token
+    except OSError:
+        pass
+    token = secrets.token_urlsafe(32)
+    path.write_text(token, encoding="utf-8")
+    return token
+
+
+def create_app(cfg: dict, db: DB, orchestrator, processor, uploader, started: float | None = None,
+               lan_url: str | None = None) -> FastAPI:
     app = FastAPI(title="GTA Clipper", docs_url=None, redoc_url=None)
     password = str(cfg["web"].get("password") or "")
+    app_token = desktop_token(cfg)
+    started = started or time.time()
 
     @app.middleware("http")
     async def basic_auth(request: Request, call_next):
-        if password:
+        if request.url.path == "/desktop-login":
+            if secrets.compare_digest(request.query_params.get("token", ""), app_token):
+                resp = RedirectResponse("/", status_code=303)
+                resp.set_cookie(DESKTOP_COOKIE, app_token, httponly=True, samesite="strict")
+                return resp
+            return Response("Ungültiger Schlüssel", status_code=403)
+        if password and not secrets.compare_digest(request.cookies.get(DESKTOP_COOKIE, ""), app_token):
             ok = False
             header = request.headers.get("authorization", "")
             if header.lower().startswith("basic "):
@@ -50,11 +80,27 @@ def create_app(cfg: dict, db: DB, orchestrator, processor, uploader) -> FastAPI:
     def index():
         return FileResponse(STATIC / "index.html")
 
+    @app.get("/favicon.ico")
+    def favicon():
+        return FileResponse(STATIC / "icon.ico")
+
     # ------------------------------------------------------------------ Status
     @app.get("/api/status")
     def status():
-        return {"streamers": orchestrator.status(), "processing": processor.current,
-                "queue": processor.q.qsize(), "time": time.time()}
+        entries = orchestrator.status()
+        by_id = {s["id"]: s for s in db.list_streamers()}
+        default_trigger = cfg["detection"]["trigger_score"]
+        for e in entries:  # Auslöse-Schwelle pro Streamer für die Linie in der Hype-Kurve
+            det = ((by_id.get(e["id"]) or {}).get("settings") or {}).get("detection") or {}
+            e["trigger"] = det.get("trigger_score") or default_trigger
+        return {"streamers": entries, "processing": processor.current, "queue": processor.q.qsize(),
+                "time": time.time(), "clips": db.count_clips_by_status(), "accounts": len(db.list_accounts())}
+
+    @app.get("/api/info")
+    def info():
+        host = cfg["web"]["host"]
+        return {"version": __version__, "started": started, "password": bool(password),
+                "lan_url": lan_url if host in ("0.0.0.0", "::") else None}
 
     @app.get("/api/streamers/{sid}/history")
     def history(sid: int):

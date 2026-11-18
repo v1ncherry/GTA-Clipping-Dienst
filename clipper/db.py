@@ -172,6 +172,8 @@ class DB:
         where, args = [], []
         if status == "open":
             where.append("status IN ('queued','processing','ready','failed')")
+        elif status == "working":
+            where.append("status IN ('queued','processing')")
         elif status and status != "all":
             where.append("status = ?")
             args.append(status)
@@ -183,6 +185,11 @@ class DB:
         sql = "SELECT * FROM clips WHERE " + " AND ".join(where) + " ORDER BY created_at DESC LIMIT ?"
         args.append(limit)
         return self.query(sql, tuple(args))
+
+    def count_clips_by_status(self, streamer_id: int | None = None) -> dict[str, int]:
+        sql = "SELECT status, COUNT(*) AS n FROM clips" + (" WHERE streamer_id = ?" if streamer_id else "")
+        rows = self.query(sql + " GROUP BY status", (streamer_id,) if streamer_id else ())
+        return {r["status"]: int(r["n"]) for r in rows}
 
     def count_clips_since(self, streamer_id: int, since: float) -> int:
         row = self.one("SELECT COUNT(*) AS n FROM clips WHERE streamer_id = ? AND created_at >= ? "

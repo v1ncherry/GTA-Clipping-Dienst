@@ -4,86 +4,162 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>GTA Clipper</title>
+  <link rel="icon" href="/static/icon.png">
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
-<header>
-  <div class="brand">GTA<span>CLIPPER</span></div>
-  <nav>
-    <button data-tab="live" class="active">Live</button>
-    <button data-tab="clips">Clips <span id="badge-clips" class="badge" hidden></span></button>
-    <button data-tab="streamers">Streamer</button>
-    <button data-tab="accounts">Accounts</button>
-  </nav>
-  <div id="queue" class="muted small"></div>
-</header>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-live" viewBox="0 0 24 24"><circle cx="12" cy="12" r="2"/><path d="M16.24 7.76a6 6 0 0 1 0 8.48M7.76 16.24a6 6 0 0 1 0-8.48M19.07 4.93a10 10 0 0 1 0 14.14M4.93 19.07a10 10 0 0 1 0-14.14"/></symbol>
+  <symbol id="i-film" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M7 3v18M17 3v18M3 7.5h4M3 12h18M3 16.5h4M17 7.5h4M17 16.5h4"/></symbol>
+  <symbol id="i-users" viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></symbol>
+  <symbol id="i-link" viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></symbol>
+  <symbol id="i-cut" viewBox="0 0 24 24"><circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M20 4 8.12 15.88M14.47 14.48 20 20M8.12 8.12 12 12"/></symbol>
+  <symbol id="i-up" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m17 8-5-5-5 5M12 3v12"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+  <symbol id="i-redo" viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/></symbol>
+  <symbol id="i-down" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5M12 15V3"/></symbol>
+  <symbol id="i-trash" viewBox="0 0 24 24"><path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6"/></symbol>
+  <symbol id="i-wifi" viewBox="0 0 24 24"><path d="M5 12.55a11 11 0 0 1 14.08 0M1.42 9a16 16 0 0 1 21.16 0M8.53 16.11a6 6 0 0 1 6.95 0"/><circle cx="12" cy="20" r="1"/></symbol>
+  <symbol id="i-lock" viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></symbol>
+  <symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></symbol>
+  <symbol id="i-cam" viewBox="0 0 24 24"><rect x="2" y="6" width="14" height="12" rx="2"/><path d="m22 8-6 4 6 4z"/></symbol>
+  <symbol id="i-cpu" viewBox="0 0 24 24"><rect x="5" y="5" width="14" height="14" rx="2"/><path d="M9 1v4M15 1v4M9 19v4M15 19v4M1 9h4M1 15h4M19 9h4M19 15h4"/></symbol>
+  <symbol id="i-copy" viewBox="0 0 24 24"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></symbol>
+  <symbol id="i-ext" viewBox="0 0 24 24"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6M15 3h6v6M10 14 21 3"/></symbol>
+  <symbol id="i-play" viewBox="0 0 24 24"><path d="M7 4l13 8-13 8z" fill="currentColor" stroke="none"/></symbol>
+  <!-- Platzhalter-Szenen, solange es noch kein Vorschaubild gibt -->
+  <symbol id="scene-a" viewBox="0 0 160 90" preserveAspectRatio="xMidYMid slice">
+    <defs><linearGradient id="sky-a" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#1b0f3d"/><stop offset=".45" stop-color="#7a2a8c"/><stop offset=".75" stop-color="#ff5d7a"/><stop offset="1" stop-color="#ffb35c"/></linearGradient></defs>
+    <rect width="160" height="90" fill="url(#sky-a)"/><circle cx="104" cy="58" r="17" fill="#ffd27a" opacity=".9"/>
+    <path d="M0 90V66h8v-8h6v12h7V52h9v20h5V60h8v-6h6v18h6V44h10v28h4V62h8v10h6V56h7v16h5V48h11v24h6V64h9v26z" fill="#160b22"/>
+    <path d="M128 90l3-30M131 60c-6-5-13-4-17 0 6-2 11-1 17 0zm0 0c5-7 12-8 18-5-7 0-12 2-18 5zm0 0c-2-6 0-11 4-14-1 5-2 9-4 14zm0 0c7-2 13 1 15 6-5-3-10-5-15-6z" stroke="#160b22" stroke-width="1.6" fill="#160b22"/>
+    <path d="M20 90l2-24M22 66c-5-4-10-3-13 0 4-1 8-1 13 0zm0 0c4-5 9-6 14-4-5 0-9 2-14 4zm0 0c5-1 10 1 12 5-4-2-8-4-12-5z" stroke="#160b22" stroke-width="1.4" fill="#160b22"/>
+  </symbol>
+  <symbol id="scene-b" viewBox="0 0 160 90" preserveAspectRatio="xMidYMid slice">
+    <defs><linearGradient id="sky-b" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#05122b"/><stop offset=".6" stop-color="#173d6e"/><stop offset="1" stop-color="#2fb3c9"/></linearGradient></defs>
+    <rect width="160" height="90" fill="url(#sky-b)"/>
+    <g fill="#ffffff" opacity=".7"><circle cx="20" cy="12" r=".6"/><circle cx="50" cy="20" r=".5"/><circle cx="90" cy="8" r=".7"/><circle cx="130" cy="18" r=".5"/><circle cx="148" cy="6" r=".6"/></g>
+    <path d="M0 90V58h10V40h8v18h6V30h12v28h5V48h10v42zM60 90V36h4v-6h8v6h4v54zM80 90V54h12V42h8v48zM104 90V28h6v-8h6v8h6v62zM126 90V50h10V38h10v12h14v40z" fill="#040a17"/>
+    <g fill="#ffd96b" opacity=".85"><rect x="64" y="40" width="2" height="2"/><rect x="70" y="48" width="2" height="2"/><rect x="108" y="34" width="2" height="2"/><rect x="114" y="46" width="2" height="2"/><rect x="108" y="58" width="2" height="2"/><rect x="28" y="38" width="2" height="2"/><rect x="132" y="56" width="2" height="2"/></g>
+    <rect y="80" width="160" height="10" fill="#020610"/><path d="M0 85h160" stroke="#ff3d7f" stroke-width=".6" stroke-dasharray="6 6" opacity=".7"/>
+  </symbol>
+  <symbol id="scene-c" viewBox="0 0 160 90" preserveAspectRatio="xMidYMid slice">
+    <defs><linearGradient id="sky-c" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#3a1d0a"/><stop offset=".55" stop-color="#c2561c"/><stop offset="1" stop-color="#f2b25e"/></linearGradient></defs>
+    <rect width="160" height="90" fill="url(#sky-c)"/><path d="M0 70q40-18 80-6t80-4v30H0z" fill="#5a2a10"/><path d="M0 80q50-10 100-2t60-2v14H0z" fill="#2b1306"/>
+    <path d="M70 76h22l4-6h-26z" fill="#111"/><circle cx="74" cy="77" r="2.4" fill="#111"/><circle cx="90" cy="77" r="2.4" fill="#111"/>
+  </symbol>
+</svg>
 
-<main>
-  <!-- LIVE -->
-  <section id="tab-live" class="tab active">
-    <div id="live-grid" class="grid"></div>
-    <p id="live-empty" class="empty" hidden>Noch keine Streamer. Unter <b>Streamer</b> eine Twitch-, YouTube- oder Kick-URL hinzufügen.</p>
-  </section>
-
-  <!-- CLIPS -->
-  <section id="tab-clips" class="tab">
-    <div class="toolbar">
-      <div class="chips" id="clip-filter">
-        <button data-status="open" class="active">Offen</button>
-        <button data-status="ready">Bereit</button>
-        <button data-status="uploaded">Hochgeladen</button>
-        <button data-status="failed">Fehler</button>
-        <button data-status="all">Alle</button>
+<div class="app">
+  <aside>
+    <div class="brand"><img src="/static/icon.png" alt=""><div><b>GTA CLIPPER</b><small>Hype-Momente → Shorts</small></div></div>
+    <nav>
+      <a class="nav" data-tab="live"><svg class="i"><use href="#i-live"/></svg><span>Live</span><span class="count live" id="n-live" hidden></span></a>
+      <a class="nav" data-tab="clips"><svg class="i"><use href="#i-film"/></svg><span>Clips</span><span class="count hot" id="n-clips" hidden></span></a>
+      <a class="nav" data-tab="streamers"><svg class="i"><use href="#i-users"/></svg><span>Streamer</span><span class="count" id="n-streamers" hidden></span></a>
+      <a class="nav" data-tab="accounts"><svg class="i"><use href="#i-link"/></svg><span>Accounts</span><span class="count" id="n-accounts" hidden></span></a>
+    </nav>
+    <div class="side-foot">
+      <div class="sys">
+        <div class="row"><span class="dot" id="sys-dot"></span><b id="sys-state">Verbinde …</b><span id="sys-since"></span></div>
+        <div class="row"><svg class="i xs"><use href="#i-cpu"/></svg><span id="sys-work">–</span></div>
+        <div class="row" id="sys-lan-row" hidden><svg class="i xs"><use href="#i-wifi"/></svg><span>Mac: <span id="sys-lan" class="sel"></span></span></div>
       </div>
-      <select id="clip-streamer"><option value="">Alle Streamer</option></select>
+      <div class="warnbox" id="warn-pw" hidden><svg class="i xs"><use href="#i-lock"/></svg><span>Kein Passwort gesetzt – im WLAN kann jeder hochladen. In <code>config.yaml</code> unter <code>web: password</code> eintragen.</span></div>
     </div>
-    <div id="clip-list" class="clip-list"></div>
-    <p id="clips-empty" class="empty" hidden>Keine Clips in dieser Ansicht.</p>
-  </section>
+  </aside>
 
-  <!-- STREAMER -->
-  <section id="tab-streamers" class="tab">
-    <form id="add-streamer" class="card add-form">
-      <h3>Streamer hinzufügen</h3>
-      <div class="row">
-        <input name="url" placeholder="https://www.twitch.tv/name · https://www.youtube.com/@name · https://kick.com/name" required>
-        <input name="name" placeholder="Anzeigename (optional)" class="w-name">
-        <select name="language" title="Sprache für Untertitel">
-          <option value="de">Deutsch</option><option value="en">Englisch</option><option value="">Automatisch</option>
-        </select>
-        <button class="primary">Hinzufügen</button>
+  <main>
+    <!-- LIVE -->
+    <section class="page" id="p-live">
+      <div class="ph"><div><h1>Live</h1><p id="live-sub">&nbsp;</p></div>
+        <div class="actions"><button class="btn" data-go="streamers"><svg class="i"><use href="#i-plus"/></svg>Streamer</button></div></div>
+      <div class="kpis">
+        <div class="kpi"><div class="lbl"><svg class="i xs"><use href="#i-live"/></svg>Live jetzt</div><div class="val" id="k-live">–</div><div class="sub" id="k-live-sub">&nbsp;</div></div>
+        <div class="kpi"><div class="lbl"><svg class="i xs"><use href="#i-cut"/></svg>Clips (24 h)</div><div class="val" id="k-clips">–</div><div class="sub" id="k-clips-sub">&nbsp;</div></div>
+        <div class="kpi"><div class="lbl"><svg class="i xs"><use href="#i-cpu"/></svg>In Arbeit</div><div class="val" id="k-work">–</div><div class="bar" id="k-work-bar"><div></div></div></div>
+        <div class="kpi hl"><div class="lbl"><svg class="i xs"><use href="#i-up"/></svg>Bereit zum Upload</div><div class="val" id="k-ready">–</div><div class="sub">warten auf dich</div><a data-go="clips">Ansehen →</a></div>
       </div>
-    </form>
-    <div id="streamer-list"></div>
-  </section>
+      <div class="live-grid" id="live-grid"></div>
+      <div id="off-list" class="off-list"></div>
+      <div class="empty-big" id="live-empty" hidden>
+        <div class="ico"><svg class="i"><use href="#i-live"/></svg></div>
+        <h2>Noch keine Streamer</h2>
+        <p>Füge eine Twitch-, YouTube- oder Kick-URL hinzu. Sobald jemand live geht, startet die Aufnahme automatisch.</p>
+        <button class="btn primary" data-go="streamers"><svg class="i"><use href="#i-plus"/></svg>Ersten Streamer hinzufügen</button>
+      </div>
+      <div id="latest-wrap" hidden>
+        <div class="sec"><h2>Neueste Clips</h2><span>automatisch erkannt</span><a class="btn sm ghost" data-go="clips">Alle Clips →</a></div>
+        <div class="strip" id="latest"></div>
+      </div>
+    </section>
 
-  <!-- ACCOUNTS -->
-  <section id="tab-accounts" class="tab">
-    <div class="card">
-      <h3>Verbundene Accounts</h3>
-      <div id="account-list"></div>
-    </div>
-    <div class="grid accounts-help">
-      <div class="card">
-        <h3><span class="pf youtube">YouTube</span></h3>
-        <p class="small">Einmalig auf dem Rechner ausführen, auf dem der Clipper läuft (öffnet den Google-Login im Browser):</p>
-        <pre>python -m clipper connect youtube</pre>
-        <p class="small muted">Läuft der Clipper auf einem anderen Rechner: <code>--manual</code> anhängen und die Weiterleitungs-URL einfügen.</p>
+    <!-- CLIPS -->
+    <section class="page" id="p-clips">
+      <div class="ph"><div><h1>Clips</h1><p>Ansehen, Titel anpassen, mit einem Klick hochladen</p></div></div>
+      <div class="toolbar">
+        <div class="seg" id="clip-filter">
+          <button data-status="ready" class="active">Bereit<i data-c="ready"></i></button>
+          <button data-status="working">In Arbeit<i data-c="working"></i></button>
+          <button data-status="uploaded">Hochgeladen<i data-c="uploaded"></i></button>
+          <button data-status="failed">Fehler<i data-c="failed"></i></button>
+          <button data-status="all">Alle</button>
+        </div>
+        <select id="clip-streamer"><option value="">Alle Streamer</option></select>
+        <select id="clip-sort"><option value="new">Neueste zuerst</option><option value="score">Höchster Score</option></select>
       </div>
-      <div class="card">
-        <h3><span class="pf tiktok">TikTok</span></h3>
-        <p class="small">1. Login-Link öffnen und Account freigeben. 2. Die URL, auf die TikTok weiterleitet, hier einfügen.</p>
-        <div class="row"><button id="tiktok-link" type="button">Login-Link öffnen</button></div>
-        <div class="row"><input id="tiktok-url" placeholder="Weitergeleitete URL (…?code=…)"><button id="tiktok-add" type="button" class="primary">Verbinden</button></div>
+      <div class="gallery" id="gallery"></div>
+      <div class="empty-big" id="clips-empty" hidden>
+        <div class="ico"><svg class="i"><use href="#i-film"/></svg></div>
+        <h2 id="clips-empty-h">Keine Clips in dieser Ansicht</h2>
+        <p>Clips entstehen automatisch, sobald ein Streamer live ist und der Chat eskaliert – oder über „Jetzt clippen“.</p>
       </div>
-      <div class="card">
-        <h3><span class="pf instagram">Instagram</span></h3>
-        <p class="small">Long-Lived Access Token aus der Meta-App (Instagram API mit Instagram-Login) einfügen. Account muss Business oder Creator sein.</p>
-        <div class="row"><input id="ig-token" placeholder="IGAA…" type="password"><button id="ig-add" type="button" class="primary">Verbinden</button></div>
+    </section>
+
+    <!-- STREAMER -->
+    <section class="page" id="p-streamers">
+      <div class="ph"><div><h1>Streamer</h1><p>Wer überwacht wird und wie empfindlich geclippt wird</p></div></div>
+      <form id="add-streamer" class="addbar">
+        <input name="url" placeholder="Twitch-, YouTube- oder Kick-Link einfügen …" required>
+        <input name="name" placeholder="Anzeigename (optional)">
+        <select name="language" title="Sprache für Untertitel"><option value="de">Deutsch</option><option value="en">Englisch</option><option value="auto">Automatisch</option></select>
+        <button class="btn primary"><svg class="i"><use href="#i-plus"/></svg>Hinzufügen</button>
+      </form>
+      <div id="streamer-list"></div>
+    </section>
+
+    <!-- ACCOUNTS -->
+    <section class="page" id="p-accounts">
+      <div class="ph"><div><h1>Accounts</h1><p>Wohin die Clips hochgeladen werden</p></div></div>
+      <div class="acc-grid">
+        <div class="acc"><div class="head youtube"></div><div class="in">
+          <h3><span class="pf youtube">YouTube</span> Shorts</h3>
+          <p>Einmal pro Kanal auf dem PC ausführen, auf dem der Clipper läuft. Der Google-Login öffnet sich im Browser.</p>
+          <div class="conns" data-p="youtube"></div>
+          <div class="cmd"><code>python -m clipper connect youtube</code><button class="btn sm" data-copy="python -m clipper connect youtube" title="Kopieren"><svg class="i xs"><use href="#i-copy"/></svg></button></div>
+          <div class="hint">Läuft der Clipper auf einem anderen Rechner: <code>--manual</code> anhängen und die Weiterleitungs-URL einfügen.</div>
+        </div></div>
+        <div class="acc"><div class="head tiktok"></div><div class="in">
+          <h3><span class="pf tiktok">TikTok</span></h3>
+          <p>Clips landen als Entwurf in der TikTok-App – dort Sound wählen und posten.</p>
+          <div class="conns" data-p="tiktok"></div>
+          <button class="btn wide" id="tiktok-link" type="button"><svg class="i"><use href="#i-ext"/></svg>1. Login-Link öffnen</button>
+          <div class="inrow"><input id="tiktok-url" placeholder="2. Weitergeleitete URL einfügen (…?code=…)"><button id="tiktok-add" type="button" class="btn primary">Verbinden</button></div>
+        </div></div>
+        <div class="acc"><div class="head instagram"></div><div class="in">
+          <h3><span class="pf instagram">Instagram</span> Reels</h3>
+          <p>Business- oder Creator-Account nötig. Token aus der Meta-App („API-Einrichtung mit Instagram-Login“).</p>
+          <div class="conns" data-p="instagram"></div>
+          <div class="inrow"><input id="ig-token" placeholder="Access Token (IGAA…)" type="password"><button id="ig-add" type="button" class="btn primary">Verbinden</button></div>
+        </div></div>
       </div>
-    </div>
-  </section>
-</main>
+    </section>
+  </main>
+</div>
+
+<!-- Clip-Editor -->
+<div class="drawer-bg" id="drawer-bg"></div>
+<aside class="drawer" id="drawer" aria-hidden="true"></aside>
 
 <dialog id="facecam-dlg">
   <form method="dialog" class="dlg">
@@ -91,10 +167,10 @@
     <p class="small muted">Rahmen mit der Maus um die Facecam ziehen. Wird für alle Clips dieses Streamers benutzt.</p>
     <div class="fc-wrap"><img id="fc-img" alt=""><canvas id="fc-canvas"></canvas></div>
     <div class="row end">
-      <button value="none" id="fc-none" type="button">Keine Facecam</button>
-      <button value="auto" id="fc-auto" type="button">Automatisch erkennen</button>
-      <button value="cancel">Abbrechen</button>
-      <button id="fc-save" type="button" class="primary">Speichern</button>
+      <button value="none" id="fc-none" type="button" class="btn">Keine Facecam</button>
+      <button value="auto" id="fc-auto" type="button" class="btn">Automatisch erkennen</button>
+      <button value="cancel" class="btn ghost">Abbrechen</button>
+      <button id="fc-save" type="button" class="btn primary">Speichern</button>
     </div>
   </form>
 </dialog>

@@ -52,6 +52,17 @@ Clip ──► Whisper-Untertitel ──► Schnitt an Satzgrenzen ──► Fac
    ```
 4. Starten: `start.bat` doppelklicken oder `python -m clipper` → Dashboard auf <http://localhost:8686>.
 
+**Als Programm (eigenes Fenster statt Browser):**
+```bat
+python -m clipper shortcut
+```
+legt „GTA Clipper“ auf dem Desktop und im Startmenü an. Doppelklick startet Überwachung + Dashboard in
+einem eigenen Fenster (ohne Konsole). Beim Schließen fragt es nach, denn ohne laufendes Programm entstehen
+keine Clips. Das Dashboard bleibt trotzdem für den Mac unter `http://<PC-IP>:8686` erreichbar. Beim ersten
+Start fragt die Windows-Firewall einmal nach „pythonw.exe“: für **private Netzwerke** erlauben, sonst kommt
+der Mac nicht ran. Läuft schon `start.bat`, öffnet die Verknüpfung nur ein Fenster dazu.
+Manuell: `python -m clipper app`. Logs ohne Konsole: `data/logs/clipper.log`.
+
 **Untertitel schneller mit der AMD-Grafikkarte:** Standardmäßig läuft Whisper auf der CPU (funktioniert, ca.
 30–60 s pro Clip). Deutlich schneller ist [whisper.cpp](https://github.com/ggml-org/whisper.cpp) mit
 **Vulkan** (läuft auf AMD): Vulkan-Build herunterladen/bauen, `ggml-large-v3-turbo.bin` laden und in
@@ -95,6 +106,9 @@ Streamer lassen sich genauso im Dashboard (Tab **Streamer**) hinzufügen.
 | **Clips** | Fertige Clips ansehen, Titel/Hook/Caption/Hashtags anpassen, Accounts anhaken, **⬆ Hochladen**. „Warum dieser Clip?“ zeigt Signale, Top-Chat-Nachrichten und Transkript |
 | **Streamer** | Auslöse-Score, Max. Clips/Stunde, Länge, Sprache, Layout, **Facecam einzeichnen**, Standard-Upload-Ziele |
 | **Accounts** | YouTube/TikTok/Instagram verbinden |
+
+**Sprache:** Pro Streamer unter *Sprache*. *Englisch* → englische Untertitel **und** englische Titel, Hooks
+und Hashtags. *Automatisch* → Whisper erkennt die Sprache selbst (Titel-Vorlagen dann deutsch).
 
 **Tuning:** Zu viele schwache Clips → *Auslöse-Score* hoch (z. B. 80). Zu wenige → runter (65).
 Die ersten ~3 Minuten jedes Streams lernt das Tool den normalen Pegel und clippt noch nichts.
@@ -190,13 +204,13 @@ Alle Gewichte, Emote-Listen und Schwellen stehen in `clipper/config.py` und kön
 |---|---|
 | Streamer bleibt „Offline“, obwohl live | `python -m clipper check`; streamlink aktualisieren: `pip install -U streamlink yt-dlp` |
 | Kick wird nicht erkannt | Kick blockt manchmal (Cloudflare). `pip install -U curl_cffi streamlink`, Chrome installiert lassen |
-| Keine Untertitel | `transcription.backend` prüfen; beim ersten Clip wird das Whisper-Modell (~1,6 GB) geladen |
+| Keine Untertitel | `transcription.backend` prüfen; beim ersten Clip wird das Whisper-Modell (~1,6 GB) geladen. Der Grund steht in `data/logs/clipper.log` („Keine Transkription verfügbar (…)“). Projektordner nicht zu tief verschachteln – Windows scheitert an Pfaden über 260 Zeichen |
 | Facecam falsch erkannt | Tab Streamer → „Einzeichnen …“ (einmal pro Streamer), dann bei Clips „Neu rendern“ |
 | Rendern langsam | `python -m clipper check` zeigt den Encoder; `libx264` = CPU. FFmpeg-Build mit AMF/VideoToolbox nutzen |
 
 ## Tests
 
 ```bash
-pip install pytest
+pip install pytest httpx
 python -m pytest -q
 ```

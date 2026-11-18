@@ -27,8 +27,9 @@ def _lan_ip() -> str | None:
         return None
 
 
-def cmd_run(cfg: dict, _args) -> None:
-    import uvicorn
+def start_services(cfg: dict):
+    """Verarbeitung, Überwachung und Web-App starten (für Terminal-Modus und Programmfenster)."""
+    import time
 
     from .monitor import Orchestrator
     from .processing import Processor
@@ -40,13 +41,21 @@ def cmd_run(cfg: dict, _args) -> None:
     processor.start()
     orchestrator = Orchestrator(cfg, db, processor)
     orchestrator.start()
-    app = create_app(cfg, db, orchestrator, processor, UploadManager(cfg, db))
+    ip = _lan_ip()
+    lan_url = f"http://{ip}:{int(cfg['web']['port'])}" if ip else None
+    app = create_app(cfg, db, orchestrator, processor, UploadManager(cfg, db), started=time.time(), lan_url=lan_url)
+    return db, orchestrator, app, lan_url
+
+
+def cmd_run(cfg: dict, _args) -> None:
+    import uvicorn
+
+    db, orchestrator, app, lan_url = start_services(cfg)
     host, port = cfg["web"]["host"], int(cfg["web"]["port"])
     print(f"\n  GTA Clipper {__version__} läuft")
     print(f"  Dashboard:        http://localhost:{port}")
-    ip = _lan_ip()
-    if ip and host in ("0.0.0.0", "::"):
-        print(f"  Im Netzwerk (Mac): http://{ip}:{port}")
+    if lan_url and host in ("0.0.0.0", "::"):
+        print(f"  Im Netzwerk (Mac): {lan_url}")
         if not cfg["web"].get("password"):
             print("  ⚠ Kein Passwort gesetzt (web.password in config.yaml) – jeder im WLAN kann hochladen!")
     n = len(db.list_streamers(enabled_only=True))
@@ -55,6 +64,18 @@ def cmd_run(cfg: dict, _args) -> None:
         uvicorn.run(app, host=host, port=port, log_level="warning")
     finally:
         orchestrator.stop()
+
+
+def cmd_app(cfg: dict, _args) -> None:
+    from .desktop import run_desktop
+
+    run_desktop(cfg)
+
+
+def cmd_shortcut(_cfg: dict, _args) -> None:
+    from .desktop import create_shortcut
+
+    print(f"✓ Verknüpfung angelegt: {create_shortcut()}")
 
 
 def cmd_add(cfg: dict, args) -> None:
@@ -227,7 +248,28 @@ def cmd_setup(args) -> None:
     print("\nFertig! Ab jetzt einfach start.bat (Windows) bzw. ./start.sh (Mac) starten.\n")
 
 
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+
+def _ensure_console() -> None:
+    """Ohne Konsole (pythonw.exe, Desktop-Verknüpfung) sind stdout/stderr None – in eine Datei umleiten.
+
+    Dort landen nur Abstürze/Prints (das eigentliche Log ist data/logs/clipper.log); bei jedem Start neu.
+    """
+    if sys.stdout is not None and sys.stderr is not None:
+        return
+    from . import util
+
+    log_dir = PROJECT_ROOT / "data" / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    out = open(log_dir / "console.log", "w", encoding="utf-8", buffering=1)  # noqa: SIM115
+    sys.stdout = sys.stdout or out
+    sys.stderr = sys.stderr or out
+    util.NO_CONSOLE = True
+
+
 def main(argv: list[str] | None = None) -> None:
+    _ensure_console()
     for stream in (sys.stdout, sys.stderr):
         try:
             stream.reconfigure(errors="replace")  # Windows-Konsolen ohne UTF-8 nicht abstürzen lassen
@@ -255,6 +297,8 @@ def main(argv: list[str] | None = None) -> None:
     c.add_argument("--token", help="Instagram Access Token")
     sub.add_parser("check", help="Installation prüfen")
     sub.add_parser("setup", help="Einrichtungsassistent (Passwort, Streamer, Prüfung)")
+    sub.add_parser("app", help="Als Programm im eigenen Fenster starten")
+    sub.add_parser("shortcut", help="Desktop-Verknüpfung für das Programm anlegen (Windows)")
     args = p.parse_args(argv)
 
     if args.cmd == "setup":
@@ -263,10 +307,18 @@ def main(argv: list[str] | None = None) -> None:
         except (KeyboardInterrupt, EOFError):
             print("\nAbgebrochen.")
         return
+    if args.cmd == "app" and not args.config:
+        # Doppelklick auf die Verknüpfung: immer im Projektordner arbeiten, beim ersten Start config.yaml anlegen
+        import os
+
+        os.chdir(PROJECT_ROOT)
+        if not Path("config.yaml").exists():
+            shutil.copyfile(PROJECT_ROOT / "config.example.yaml", "config.yaml")
     cfg = load_config(args.config)
     setup_logging(cfg["data_dir"])
     handlers = {"run": cmd_run, "add": cmd_add, "list": cmd_list, "remove": cmd_remove, "vod": cmd_vod,
-                "connect": cmd_connect, "check": cmd_check, None: cmd_run}
+                "connect": cmd_connect, "check": cmd_check, "app": cmd_app, "shortcut": cmd_shortcut,
+                None: cmd_run}
     try:
         handlers[args.cmd](cfg, args)
     except KeyboardInterrupt:

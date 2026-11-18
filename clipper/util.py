@@ -20,6 +20,7 @@ IS_WINDOWS = sys.platform.startswith("win")
 IS_MAC = sys.platform == "darwin"
 IS_MAC_ARM = IS_MAC and platform.machine() in ("arm64", "aarch64")
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0) if IS_WINDOWS else 0
+NO_CONSOLE = False  # True beim Start ohne Konsole (pythonw.exe) – dann nur ins Logfile schreiben
 
 
 def setup_logging(data_dir: str, level: str = "INFO") -> None:
@@ -28,15 +29,17 @@ def setup_logging(data_dir: str, level: str = "INFO") -> None:
         return
     root.setLevel(level)
     fmt = logging.Formatter("%(asctime)s %(levelname)-7s %(name)s: %(message)s", "%H:%M:%S")
-    console = logging.StreamHandler()
-    console.setFormatter(fmt)
-    root.addHandler(console)
+    if not NO_CONSOLE:
+        console = logging.StreamHandler()
+        console.setFormatter(fmt)
+        root.addHandler(console)
     logfile = Path(data_dir) / "logs" / "clipper.log"
     logfile.parent.mkdir(parents=True, exist_ok=True)
     fileh = logging.handlers.RotatingFileHandler(logfile, maxBytes=5_000_000, backupCount=3, encoding="utf-8")
     fileh.setFormatter(fmt)
     root.addHandler(fileh)
-    for noisy in ("httpx", "urllib3", "googleapiclient", "streamlink", "websockets", "chat_downloader", "faster_whisper"):
+    for noisy in ("httpx", "httpx2", "huggingface_hub", "urllib3", "googleapiclient", "streamlink", "websockets",
+                  "chat_downloader", "faster_whisper"):
         logging.getLogger(noisy).setLevel(logging.WARNING)
     root._clipper_configured = True  # type: ignore[attr-defined]
 

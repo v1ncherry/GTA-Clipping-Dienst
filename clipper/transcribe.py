@@ -17,7 +17,7 @@ import threading
 from dataclasses import dataclass
 from pathlib import Path
 
-from .util import IS_MAC_ARM, NO_WINDOW
+from .util import IS_MAC_ARM, NO_WINDOW, ffmpeg_bin
 
 log = logging.getLogger("clipper.transcribe")
 
@@ -61,10 +61,22 @@ class FasterWhisper(Transcriber):
                  t["model"], device, compute)
         self.model = WhisperModel(t["model"], device=device, compute_type=compute,
                                   download_root=str(Path(cfg["data_dir"]) / "models" / "whisper"))
+        self.ffmpeg = ffmpeg_bin(cfg)
+
+    def _load_audio(self, path: str):
+        """Audio per ffmpeg als 16-kHz-Mono laden. faster-whisper würde sonst PyAV nehmen, dessen API sich
+        zwischen Versionen ändert (faster-whisper 1.2.1 + av 19 → 'unexpected keyword argument metadata_errors')."""
+        import numpy as np
+
+        proc = subprocess.run([self.ffmpeg, "-hide_banner", "-loglevel", "error", "-nostdin", "-i", path,
+                               "-f", "s16le", "-ac", "1", "-ar", "16000", "-"],
+                              capture_output=True, check=True, creationflags=NO_WINDOW, timeout=300)
+        return np.frombuffer(proc.stdout, np.int16).astype(np.float32) / 32768.0
 
     def transcribe(self, wav: str, language: str | None) -> list[Word]:
-        segments, _info = self.model.transcribe(wav, language=language or None, word_timestamps=True,
-                                                vad_filter=True, beam_size=5, condition_on_previous_text=False)
+        segments, _info = self.model.transcribe(self._load_audio(wav), language=language or None,
+                                                word_timestamps=True, vad_filter=True, beam_size=5,
+                                                condition_on_previous_text=False)
         words = []
         for seg in segments:
             for w in seg.words or []:
@@ -139,6 +151,7 @@ def get_transcriber(cfg: dict) -> Transcriber:
             order = [backend]
         classes = {"faster-whisper": FasterWhisper, "mlx": MLXWhisper, "whisper.cpp": WhisperCpp,
                    "none": Transcriber}
+        reasons = []
         for name in order:
             try:
                 _INSTANCE = classes[name](cfg) if name != "none" else Transcriber()
@@ -147,13 +160,16 @@ def get_transcriber(cfg: dict) -> Transcriber:
             except Exception as exc:  # noqa: BLE001
                 level = logging.WARNING if backend != "auto" else logging.DEBUG
                 log.log(level, "Transkriptions-Backend %s nicht verfügbar: %s", name, exc)
-        log.warning("Keine Transkription verfügbar – Clips bekommen keine Untertitel")
+                reasons.append(f"{name}: {exc}")
+        log.warning("Keine Transkription verfügbar – Clips bekommen keine Untertitel (%s)", "; ".join(reasons))
         _INSTANCE = Transcriber()
         return _INSTANCE
 
 
 def transcribe_locked(cfg: dict, wav: str, language: str | None) -> list[Word]:
     tr = get_transcriber(cfg)
+    if str(language or "").lower() in ("", "auto"):  # „Automatisch“: Whisper erkennt die Sprache selbst
+        language = None
     with _LOCK:  # ein Modell, eine Transkription gleichzeitig
         return tr.transcribe(wav, language)
 

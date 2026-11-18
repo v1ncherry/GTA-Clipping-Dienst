@@ -116,3 +116,69 @@ def test_render_crop_layout(tmp_path):
     assert (res["width"], res["height"]) == (1080, 1920)
     assert 4.5 < res["duration"] < 5.5
     assert res["has_audio"]
+
+
+def test_texts_follow_streamer_language():
+    from clipper.texts import build_hashtags, make_texts, text_language
+
+    streamer = {"name": "Luca", "url": "https://www.twitch.tv/luca", "platform": "twitch"}
+    clip = {"id": 3, "category": "funny"}
+    en_cfg = deep_merge(DEFAULTS, {"transcription": {"language": "en"}})
+    de_cfg = deep_merge(DEFAULTS, {"transcription": {"language": "de"}})
+    auto_cfg = deep_merge(DEFAULTS, {"transcription": {"language": "auto"}})
+    assert text_language(en_cfg) == "en" and text_language(de_cfg) == "de" and text_language(auto_cfg) == "de"
+    en, de = make_texts(en_cfg, streamer, clip), make_texts(de_cfg, streamer, clip)
+    german = ("nicht", "Chat ist", "lustig", "Warum", "ESKALIERT", "WIE KANN")
+    assert not any(w in en["title"] + en["hook"] for w in german)
+    assert "#lustig" not in build_hashtags(en_cfg, streamer, "funny")
+    assert "#lustig" in build_hashtags(de_cfg, streamer, "funny")
+    assert en["title"] != de["title"]
+
+
+def test_auto_language_lets_whisper_detect(monkeypatch):
+    import clipper.transcribe as tr
+
+    seen = []
+
+    class Fake(tr.Transcriber):
+        def transcribe(self, wav, language):
+            seen.append(language)
+            return []
+
+    monkeypatch.setattr(tr, "_INSTANCE", Fake())
+    for lang in ("auto", "", None, "en"):
+        tr.transcribe_locked(DEFAULTS, "x.wav", lang)
+    assert seen == [None, None, None, "en"]
+
+
+def test_desktop_login_sets_cookie_and_password_still_protects(tmp_path):
+    from fastapi.testclient import TestClient
+
+    from clipper.web.app import create_app
+
+    class Stub:
+        current = {}
+
+        class q:  # noqa: N801
+            @staticmethod
+            def qsize():
+                return 0
+
+        def status(self):
+            return []
+
+    cfg = deep_merge(DEFAULTS, {"data_dir": str(tmp_path), "web": {"password": "geheim"}})
+    (tmp_path / "secrets").mkdir()
+    from clipper.db import DB
+
+    db = DB(str(tmp_path / "t.db"))
+    app = create_app(cfg, db, Stub(), Stub(), None)
+    token = (tmp_path / "secrets" / "desktop.token").read_text().strip()
+    with TestClient(app) as c:
+        assert c.get("/api/status").status_code == 401
+        assert c.get("/desktop-login?token=falsch", follow_redirects=False).status_code == 403
+        r = c.get(f"/desktop-login?token={token}", follow_redirects=False)
+        assert r.status_code == 303
+        assert c.get("/api/status").status_code == 200  # Cookie aus der Weiterleitung
+    with TestClient(app) as c2:
+        assert c2.get("/api/info", auth=("x", "geheim")).json()["password"] is True

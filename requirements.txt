@@ -20,3 +20,6 @@ faster-whisper>=1.1
 # Uploads
 google-api-python-client>=2.120
 google-auth-oauthlib>=1.2
+
+# Programmfenster statt Browser (Windows, nutzt Edge WebView2)
+pywebview>=5.3; sys_platform == "win32"
