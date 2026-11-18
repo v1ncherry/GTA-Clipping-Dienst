@@ -1,0 +1,22 @@
+# Kern
+fastapi>=0.110
+uvicorn[standard]>=0.29
+pyyaml>=6.0
+numpy>=1.26
+requests>=2.31
+# OpenCV 4.x (enthält YuNet + Haar-Cascades für die Facecam-Erkennung)
+opencv-python-headless>=4.8,<5
+
+# Streams & Chat
+streamlink>=7.0
+yt-dlp>=2025.1.1
+chat-downloader>=0.2.8
+websockets>=13.0
+curl_cffi>=0.7          # Kick-API hinter Cloudflare
+
+# Untertitel (Windows/Linux). Auf dem Mac zusätzlich: pip install mlx-whisper
+faster-whisper>=1.1
+
+# Uploads
+google-api-python-client>=2.120
+google-auth-oauthlib>=1.2

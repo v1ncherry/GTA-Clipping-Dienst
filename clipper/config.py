@@ -185,7 +185,7 @@ def load_config(path: str | os.PathLike | None = None) -> dict:
             break
     data_dir = Path(cfg["data_dir"]).expanduser()
     if not data_dir.is_absolute():
-        base = Path(cfg.get("_config_path", "config.yaml")).resolve().parent
+        base = Path(cfg.get("_config_path") or path or "config.yaml").resolve().parent
         data_dir = base / data_dir
     cfg["data_dir"] = str(data_dir)
     for sub in ("buffer", "clips", "models", "logs", "vods", "secrets"):

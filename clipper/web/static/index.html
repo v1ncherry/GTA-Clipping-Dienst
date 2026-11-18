@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>GTA Clipper</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header>
+  <div class="brand">GTA<span>CLIPPER</span></div>
+  <nav>
+    <button data-tab="live" class="active">Live</button>
+    <button data-tab="clips">Clips <span id="badge-clips" class="badge" hidden></span></button>
+    <button data-tab="streamers">Streamer</button>
+    <button data-tab="accounts">Accounts</button>
+  </nav>
+  <div id="queue" class="muted small"></div>
+</header>
+
+<main>
+  <!-- LIVE -->
+  <section id="tab-live" class="tab active">
+    <div id="live-grid" class="grid"></div>
+    <p id="live-empty" class="empty" hidden>Noch keine Streamer. Unter <b>Streamer</b> eine Twitch-, YouTube- oder Kick-URL hinzufügen.</p>
+  </section>
+
+  <!-- CLIPS -->
+  <section id="tab-clips" class="tab">
+    <div class="toolbar">
+      <div class="chips" id="clip-filter">
+        <button data-status="open" class="active">Offen</button>
+        <button data-status="ready">Bereit</button>
+        <button data-status="uploaded">Hochgeladen</button>
+        <button data-status="failed">Fehler</button>
+        <button data-status="all">Alle</button>
+      </div>
+      <select id="clip-streamer"><option value="">Alle Streamer</option></select>
+    </div>
+    <div id="clip-list" class="clip-list"></div>
+    <p id="clips-empty" class="empty" hidden>Keine Clips in dieser Ansicht.</p>
+  </section>
+
+  <!-- STREAMER -->
+  <section id="tab-streamers" class="tab">
+    <form id="add-streamer" class="card add-form">
+      <h3>Streamer hinzufügen</h3>
+      <div class="row">
+        <input name="url" placeholder="https://www.twitch.tv/name · https://www.youtube.com/@name · https://kick.com/name" required>
+        <input name="name" placeholder="Anzeigename (optional)" class="w-name">
+        <select name="language" title="Sprache für Untertitel">
+          <option value="de">Deutsch</option><option value="en">Englisch</option><option value="">Automatisch</option>
+        </select>
+        <button class="primary">Hinzufügen</button>
+      </div>
+    </form>
+    <div id="streamer-list"></div>
+  </section>
+
+  <!-- ACCOUNTS -->
+  <section id="tab-accounts" class="tab">
+    <div class="card">
+      <h3>Verbundene Accounts</h3>
+      <div id="account-list"></div>
+    </div>
+    <div class="grid accounts-help">
+      <div class="card">
+        <h3><span class="pf youtube">YouTube</span></h3>
+        <p class="small">Einmalig auf dem Rechner ausführen, auf dem der Clipper läuft (öffnet den Google-Login im Browser):</p>
+        <pre>python -m clipper connect youtube</pre>
+        <p class="small muted">Läuft der Clipper auf einem anderen Rechner: <code>--manual</code> anhängen und die Weiterleitungs-URL einfügen.</p>
+      </div>
+      <div class="card">
+        <h3><span class="pf tiktok">TikTok</span></h3>
+        <p class="small">1. Login-Link öffnen und Account freigeben. 2. Die URL, auf die TikTok weiterleitet, hier einfügen.</p>
+        <div class="row"><button id="tiktok-link" type="button">Login-Link öffnen</button></div>
+        <div class="row"><input id="tiktok-url" placeholder="Weitergeleitete URL (…?code=…)"><button id="tiktok-add" type="button" class="primary">Verbinden</button></div>
+      </div>
+      <div class="card">
+        <h3><span class="pf instagram">Instagram</span></h3>
+        <p class="small">Long-Lived Access Token aus der Meta-App (Instagram API mit Instagram-Login) einfügen. Account muss Business oder Creator sein.</p>
+        <div class="row"><input id="ig-token" placeholder="IGAA…" type="password"><button id="ig-add" type="button" class="primary">Verbinden</button></div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<dialog id="facecam-dlg">
+  <form method="dialog" class="dlg">
+    <h3>Facecam einzeichnen – <span id="fc-name"></span></h3>
+    <p class="small muted">Rahmen mit der Maus um die Facecam ziehen. Wird für alle Clips dieses Streamers benutzt.</p>
+    <div class="fc-wrap"><img id="fc-img" alt=""><canvas id="fc-canvas"></canvas></div>
+    <div class="row end">
+      <button value="none" id="fc-none" type="button">Keine Facecam</button>
+      <button value="auto" id="fc-auto" type="button">Automatisch erkennen</button>
+      <button value="cancel">Abbrechen</button>
+      <button id="fc-save" type="button" class="primary">Speichern</button>
+    </div>
+  </form>
+</dialog>
+
+<div id="toast"></div>
+<script src="/static/app.js"></script>
+</body>
+</html>

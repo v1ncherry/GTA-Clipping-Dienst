@@ -82,6 +82,9 @@ def streamlink_check(url: str) -> LiveInfo:
         streams = plugin.streams()
     except PluginError as exc:
         log.debug("streamlink %s: %s", url, exc)
+        if "Unable to open URL" in str(exc):
+            # Netzwerk-/Plattformfehler – nicht als "offline" tarnen, sondern im Dashboard anzeigen
+            return LiveInfo(False, extra={"error": f"Plattform nicht erreichbar: {str(exc)[:160]}"})
         streams = {}
     try:
         title, category, vid = plugin.get_title(), plugin.get_category(), plugin.get_id()

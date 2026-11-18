@@ -1,0 +1,73 @@
+# GTA Clipper – Konfiguration
+# Kopieren nach config.yaml und anpassen. Alles, was hier fehlt, nimmt den Standardwert
+# (siehe clipper/config.py). Viele Werte lassen sich pro Streamer im Dashboard überschreiben.
+
+data_dir: data          # Puffer, Clips, Datenbank, Modelle
+workers: 2              # wie viele Clips gleichzeitig gerendert werden
+
+web:
+  host: 0.0.0.0         # 0.0.0.0 = auch vom MacBook im selben WLAN erreichbar
+  port: 8686
+  password: ""          # UNBEDINGT setzen, wenn das Dashboard im Netzwerk erreichbar ist
+
+monitor:
+  poll_seconds: 60      # wie oft geprüft wird, ob ein Streamer live gegangen ist
+  only_keywords: ["gta", "grand theft auto"]   # nur clippen, wenn Kategorie/Titel passt ([] = immer)
+  quality: "1080p60,1080p,936p60,900p60,720p60,720p,best"
+
+buffer:
+  keep_minutes: 15      # so viel Stream wird rückwirkend vorgehalten (ca. 1 GB pro Streamer bei 1080p60)
+
+detection:
+  trigger_score: 72     # 0-100. Höher = weniger, aber krassere Clips
+  release_score: 50
+  max_clips_per_hour: 10
+  cooldown_seconds: 45
+  chat_delay: {twitch: 4, youtube: 7, kick: 5, vod: 8}   # wird live automatisch nachjustiert
+
+clips:
+  min_seconds: 20
+  max_seconds: 60
+  pre_roll: 18          # Sekunden Vorlauf vor dem Hype (Kontext!)
+  post_roll: 5
+
+transcription:
+  backend: auto         # auto | faster-whisper | mlx | whisper.cpp | none
+  model: large-v3-turbo # faster-whisper: tiny/base/small/medium/large-v3-turbo
+  language: de
+  # AMD-Grafikkarte (z.B. RX 9070 XT) unter Windows: whisper.cpp mit Vulkan ist am schnellsten
+  # whispercpp_bin: "C:/tools/whisper/whisper-cli.exe"
+  # whispercpp_model: "C:/tools/whisper/ggml-large-v3-turbo.bin"
+
+render:
+  encoder: auto         # auto wählt h264_amf (AMD), h264_videotoolbox (Mac), h264_nvenc oder libx264
+  layout: auto          # auto | stack | crop | blur
+  fps: auto
+  hook_text: true       # Einblendung der ersten Sekunden ("ER KANN NICHT MEHR")
+  credit: true          # "twitch.tv/name" im Video
+  subtitles:
+    font: "Arial Black"
+    # fonts_dir: "fonts"  # eigener Font-Ordner, z.B. mit Montserrat ExtraBold
+    size: 82
+    highlight: "#FFE600"
+    uppercase: true
+
+llm:                    # optional: lokales LLM für bessere Titel + KI-Bewertung (kostenlos, Ollama)
+  enabled: false
+  url: http://localhost:11434
+  model: qwen2.5:7b-instruct
+
+hashtags: ["#gta6", "#gtavi", "#gta", "#gaming"]
+
+uploads:
+  youtube:
+    client_secrets: client_secret.json   # aus der Google Cloud Console (OAuth-Client "Desktop-App")
+    privacy: public                       # public | unlisted | private
+  tiktok:
+    client_key: ""
+    client_secret: ""
+    redirect_uri: ""                      # muss exakt so im TikTok-Developer-Portal eingetragen sein
+    mode: inbox                           # inbox = Entwurf in der App, direct = direkt posten
+  instagram:
+    api_base: https://graph.instagram.com
+    api_version: v21.0
