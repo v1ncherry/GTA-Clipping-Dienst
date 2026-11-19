@@ -118,6 +118,17 @@ def template_texts(streamer: dict, category: str, seed: int, lang: str = "de", k
 
 SYSTEM_PROMPT = """Du bist Social-Media-Editor für virale Gaming-Shorts (TikTok, YouTube Shorts, Instagram Reels).
 Du bekommst das Transkript eines Stream-Ausschnitts und die häufigsten Chat-Nachrichten in dem Moment.
+
+Bewerte streng. Gib score 1-2, wenn:
+- der Streamer schläft, AFK oder nicht am Platz ist (der Chat schreibt z.B. "wake up", "is he asleep", "let him sleep",
+  "schläft er?", "afk", "zzz") – auch wenn es dabei laut wird,
+- im Transkript nur eine vorgelesene Spende, Text-to-Speech, ein Super Chat, Bits/Cheers, Sub- oder Follow-Alert zu
+  hören ist ("X tipped $5 through Super Chat", "Y cheered 100 bits") – das spricht eine Computerstimme, nicht der Streamer,
+- nur Werbung, Pause, Ladebildschirm, Musik oder Warten zu sehen ist,
+- der Chat nur auf eine Frage des Streamers antwortet (Zahlen, "ja"/"nein", Namen) oder spammt,
+- im Transkript nichts Erkennbares passiert.
+Hohe Scores (7-10) nur, wenn der Streamer selbst deutlich reagiert (lacht, schreit, ist geschockt, macht einen Witz)
+oder im Spiel etwas Besonderes passiert. Im Zweifel niedriger bewerten.
 Antworte NUR mit JSON in genau diesem Format:
 {"score": <1-10, wie clipwürdig/viral ist der Moment>,
  "title": "<Titel, max 70 Zeichen, <SPRACHE>, neugierig machend, nicht irreführend, 1-2 Emojis>",
@@ -126,14 +137,16 @@ Antworte NUR mit JSON in genau diesem Format:
  "reason": "<ein Satz, warum der Moment funktioniert oder nicht>"}"""
 
 
-def llm_texts(cfg: dict, streamer: dict, category: str, transcript: str, chat_sample: list, stream_title: str) -> dict | None:
+def llm_texts(cfg: dict, streamer: dict, category: str, transcript: str, chat_sample: list, stream_title: str,
+              hints: list[str] | None = None) -> dict | None:
     from . import llm as llm_mod
 
     model = llm_mod.active_model(cfg)
     if not model:
         return None
     chat = "\n".join(f"{n}x {t}" for t, n in (chat_sample or [])[:12])
-    user = (f"Streamer: {streamer.get('name')}\nStream-Titel: {stream_title or '-'}\nErkannte Stimmung: {category}\n\n"
+    user = (f"Streamer: {streamer.get('name')}\nStream-Titel: {stream_title or '-'}\nErkannte Stimmung: {category}\n"
+            + "".join(f"Hinweis: {h}\n" for h in hints or []) + "\n"
             f"Transkript:\n{(transcript or '(kein Text)')[:1800]}\n\nChat in dem Moment:\n{chat or '(kein Chat)'}")
     system = SYSTEM_PROMPT.replace("<SPRACHE>", "Englisch" if text_language(cfg) == "en" else "Deutsch")
     try:
@@ -157,12 +170,25 @@ def llm_texts(cfg: dict, streamer: dict, category: str, transcript: str, chat_sa
     return out
 
 
+def moment_hints(clip: dict) -> list[str]:
+    """Was die Erkennung über den Moment weiß – als Zusatzinfo für die KI-Bewertung."""
+    bd = clip.get("breakdown") or {}
+    q = bd.get("quality") or {}
+    hints = []
+    sleep = q.get("sleep_msgs", bd.get("sleep_msgs")) or 0
+    if sleep >= 2:
+        hints.append(f"{sleep} Chat-Nachrichten in den Minuten davor sagen, dass der Streamer schläft/AFK ist")
+    if bd.get("mode") == "stream":
+        hints.append("ausgelöst nur durch Lautstärke/Bewegung im Stream, kaum Chat-Reaktion")
+    return hints
+
+
 def make_texts(cfg: dict, streamer: dict, clip: dict) -> dict:
     category = clip.get("category") or "hype"
     base = template_texts(streamer, category, seed=int(clip.get("id") or 0), lang=text_language(cfg),
                           keyword=(clip.get("breakdown") or {}).get("keyword"))
     llm = llm_texts(cfg, streamer, category, clip.get("transcript") or "", clip.get("chat_sample") or [],
-                    clip.get("stream_title") or "") or {}
+                    clip.get("stream_title") or "", hints=moment_hints(clip)) or {}
     title = llm.get("title") or base["title"]
     hook = llm.get("hook") or base["hook"]
     hashtags = build_hashtags(cfg, streamer, category, llm.get("hashtags"))

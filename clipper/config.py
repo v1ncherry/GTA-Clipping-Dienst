@@ -72,6 +72,14 @@ DEFAULTS: dict[str, Any] = {
         "raid_seconds": 90,
         # Nach dem Transkribieren: Hat der Streamer kurz vorher den Chat etwas gefragt?
         "question_check": True,
+        # Streamer schläft / ist AFK: Chat schreibt in den letzten Minuten auffällig oft "wake up", "schläft er?" …
+        "sleep_check": True,
+        "sleep_window": 180,     # so viele Sekunden Chat vor dem Moment werden angeschaut
+        "sleep_min_msgs": 3,     # mind. so viele Schlaf-Nachrichten …
+        "sleep_ratio": 0.04,     # … und mind. dieser Anteil am Chat
+        # Nach dem Transkribieren: Ist der Moment nur eine vorgelesene Spende / TTS / Super Chat / Bits-Ansage?
+        "alert_check": True,
+        "alert_max_other_words": 12,   # mehr eigene Worte des Streamers drumherum = echte Reaktion, bleibt drin
         # Aussortierte Rohvideos nach so vielen Stunden löschen
         "keep_hours": 48,
     },

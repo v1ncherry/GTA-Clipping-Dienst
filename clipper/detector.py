@@ -8,6 +8,9 @@ Drei Spuren:
                 Chat-Ausbrüche (Antworten auf Fragen, Raids, Spam ohne Reaktion im Stream).
 2. Spezial    – Chat erwähnt auffällig oft Easter Eggs/Geheimnisse oder Glitches/Bugs.
 3. Stille     – sonst aktiver Chat wird plötzlich still (Spannung, Story, alle schauen gebannt zu).
+
+Schläft der Streamer oder ist er weg (Chat schreibt "wake up", "is he asleep", "schläft er?"), wird nichts geclippt –
+laute Spenden-Ansagen oder Alerts lösen dann sonst "Stream-Momente" aus.
 """
 
 from __future__ import annotations
@@ -226,6 +229,23 @@ class Detector:
             self.on_event(event)
 
     # ------------------------------------------------------------------ Qualität / Filter
+    def sleep_info(self, start: float, end: float) -> tuple[int, bool]:
+        """Schreibt der Chat in den Minuten davor auffällig oft, dass der Streamer schläft/AFK ist?"""
+        lag = int(round(self.lag))
+        a, b = int(start) + lag - 2, int(end) + lag + 8
+        w = int(self.f.get("sleep_window", 180))
+        sleep_wide = float(self.tl.window("sleep", a - w, b).sum())
+        msgs_wide = float(self.tl.window("msgs", a - w, b).sum())
+        sleep_now = float(self.tl.window("sleep", a, b).sum())
+        msgs_now = float(self.tl.window("msgs", a, b).sum())
+        if not self.f.get("enabled", True) or not self.f.get("sleep_check", True):
+            return int(sleep_wide), False
+        if sleep_wide < float(self.f.get("sleep_min_msgs", 3)):
+            return int(sleep_wide), False
+        ratio = float(self.f.get("sleep_ratio", 0.04))
+        asleep = (msgs_wide and sleep_wide / msgs_wide >= ratio) or (msgs_now and sleep_now / msgs_now >= 3 * ratio)
+        return int(sleep_wide), bool(asleep)
+
     def assess(self, start: float, end: float, parts: dict) -> tuple[dict, str | None]:
         """Ist der Chat-Ausbruch echter Hype – oder z.B. nur Antworten auf eine Frage des Streamers?"""
         lag = int(round(self.lag))
@@ -239,14 +259,17 @@ class Detector:
         reaction = float(max(self.za[s0:s1].max(initial=0.0), 0.8 * self.zm[s0:s1].max(initial=0.0)))
         raid_window = float(self.f.get("raid_seconds", 90))
         noise = tl.noise_between(a - raid_window, b)
+        sleep_msgs, asleep = self.sleep_info(start, end)
         quality = {"hype_ratio": round(hype_ratio, 2), "answer_ratio": round(answer_ratio, 2),
                    "stream_reaction": round(reaction, 2), "messages": int(msgs), "clip_requests": int(clips),
-                   "raid": bool(noise)}
+                   "raid": bool(noise), "sleep_msgs": sleep_msgs}
         reason = None
         if self.f.get("enabled", True):
             min_hype = float(self.f.get("min_hype_ratio", 0.25))
             if noise:
                 reason = "Raid/Sub-Welle im Chat"
+            elif asleep and clips < 3:
+                reason = "Streamer schläft / ist AFK"
             elif parts.get("mode") == "chat" and clips < 3:
                 if answer_ratio >= float(self.f.get("max_answer_ratio", 0.45)) and hype_ratio < min_hype \
                         and reaction < 2.0:
@@ -288,6 +311,9 @@ class Detector:
         ev = self.build_event(moment - 10, moment + 5, moment, score, parts, source="special", category=category,
                               window=window)
         ev["breakdown"]["special_mentions"] = int(cnt)
+        sleep_msgs, asleep = self.sleep_info(moment - 10, moment + 5)
+        if asleep:
+            ev["filtered"] = "Streamer schläft / ist AFK"
         if category == "stichwort":
             texts = [m[2].lower() for m in self.tl.messages_between(c - 7, c + 8)]
             words = [str(w) for w in self.sp.get("keywords") or []]
@@ -324,6 +350,10 @@ class Detector:
         window = self._fit_window(start - 5, idx + 10, keep_end=True)
         ev = self.build_event(start, idx, idx, score, parts, source="special", category="spannung", window=window)
         ev["breakdown"]["silence_seconds"] = int(length)
+        sleep_msgs, asleep = self.sleep_info(start, idx)
+        ev["breakdown"]["sleep_msgs"] = sleep_msgs
+        if asleep:   # stiller Chat, weil der Streamer schläft – keine Spannung
+            ev["filtered"] = "Streamer schläft / ist AFK"
         self._emit(ev)
 
     def _fit_window(self, s: float, e: float, keep_end: bool = False) -> tuple[float, float]:
