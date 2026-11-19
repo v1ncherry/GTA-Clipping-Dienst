@@ -3,7 +3,7 @@
 Nutzt pywebview (unter Windows Edge WebView2, ist in Windows 11 dabei). Das Dashboard bleibt zusätzlich im
 Netzwerk erreichbar (z.B. vom MacBook über http://<PC-IP>:8686).
 
-Start: Desktop-Verknüpfung „GTA Clipper“ oder `python -m clipper app`.
+Start: Desktop-Verknüpfung „ClipStream“ oder `python -m clipper app`.
 Verknüpfung anlegen: `python -m clipper shortcut`.
 """
 
@@ -27,7 +27,7 @@ ROOT = Path(__file__).resolve().parent.parent
 ICON = Path(__file__).resolve().parent / "web" / "static" / "icon.ico"
 
 LOCALIZATION = {
-    "global.quitConfirmation": "GTA Clipper beenden?\n\nÜberwachung und Aufnahmen werden gestoppt – solange das "
+    "global.quitConfirmation": "ClipStream beenden?\n\nÜberwachung und Aufnahmen werden gestoppt – solange das "
                                "Programm zu ist, werden keine Clips erstellt.",
     "global.ok": "OK",
     "global.quit": "Beenden",
@@ -84,20 +84,20 @@ def run_desktop(cfg: dict) -> None:
         if not server.started:
             log.error("Dashboard-Server startet nicht (Port %d belegt?)", port)
         in_lan = lan_url and cfg["web"]["host"] in ("0.0.0.0", "::")
-        log.info("GTA Clipper läuft im Programmfenster%s", f" · im Netzwerk: {lan_url}" if in_lan else "")
+        log.info("ClipStream läuft im Programmfenster%s", f" · im Netzwerk: {lan_url}" if in_lan else "")
 
     if IS_WINDOWS:
         try:  # eigenes Taskleisten-Symbol statt dem von Python
             import ctypes
 
-            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("GTAClipper.Dashboard")
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("ClipStream.Dashboard")
         except Exception:  # noqa: BLE001
             pass
 
     webview.settings["ALLOW_DOWNLOADS"] = True
     webview.settings["OPEN_EXTERNAL_LINKS_IN_BROWSER"] = True
     webview.create_window(
-        "GTA Clipper", f"http://127.0.0.1:{port}/desktop-login?token={desktop_token(cfg)}",
+        "ClipStream", f"http://127.0.0.1:{port}/desktop-login?token={desktop_token(cfg)}",
         width=1380, height=880, min_size=(980, 640), background_color="#0a0c11",
         confirm_close=server is not None, text_select=True,
     )
@@ -112,7 +112,7 @@ def run_desktop(cfg: dict) -> None:
 
 
 def create_shortcut() -> str:
-    """Verknüpfungen „GTA Clipper“ auf dem Desktop und im Startmenü anlegen (Windows)."""
+    """Verknüpfungen „ClipStream“ auf dem Desktop und im Startmenü anlegen (Windows)."""
     if not IS_WINDOWS:
         raise RuntimeError("Verknüpfungen gibt es nur unter Windows – auf dem Mac ./start.sh benutzen")
     pythonw = Path(sys.executable).with_name("pythonw.exe")
@@ -125,12 +125,13 @@ def create_shortcut() -> str:
     script = (
         "$ws = New-Object -ComObject WScript.Shell\n"
         "foreach ($dir in @([Environment]::GetFolderPath('Desktop'), [Environment]::GetFolderPath('Programs'))) {\n"
-        "  $s = $ws.CreateShortcut((Join-Path $dir 'GTA Clipper.lnk'))\n"
+        "  Remove-Item -ErrorAction SilentlyContinue (Join-Path $dir 'GTA Clipper.lnk')\n"  # alter Name
+        "  $s = $ws.CreateShortcut((Join-Path $dir 'ClipStream.lnk'))\n"
         f"  $s.TargetPath = '{q(pythonw)}'\n"
         "  $s.Arguments = '-m clipper app'\n"
         f"  $s.WorkingDirectory = '{q(ROOT)}'\n"
         f"  $s.IconLocation = '{q(ICON)},0'\n"
-        "  $s.Description = 'GTA Clipper – Hype-Momente zu Shorts'\n"
+        "  $s.Description = 'ClipStream – Stream-Highlights zu Shorts'\n"
         "  $s.Save()\n"
         "  Write-Output $s.FullName\n"
         "}\n"

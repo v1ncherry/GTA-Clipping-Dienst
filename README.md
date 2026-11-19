@@ -1,8 +1,11 @@
-# GTA Clipper 🎬
+<img src="clipper/web/static/icon.png" width="72" align="left" alt="">
 
-Überwacht die Live-Streams eurer Streamer (Twitch, YouTube, Kick), erkennt Hype-Momente am Chat **und** am
-Stream selbst, schneidet daraus fertige Hochformat-Shorts mit KI-Untertiteln und lädt sie per Klick auf
-YouTube Shorts, TikTok und Instagram Reels hoch.
+# ClipStream
+
+Clipping-Dienst für Live-Streams – für jedes Spiel. Überwacht eure Streamer (Twitch, YouTube, Kick), erkennt
+Hype-Momente am Chat **und** am Stream selbst, sortiert leere Chat-Ausbrüche aus, schneidet fertige
+Hochformat-Shorts mit KI-Untertiteln und optionalem Chat-Overlay und lädt sie per Klick auf YouTube Shorts,
+TikTok und Instagram Reels hoch.
 
 ```
 Stream ──► Aufnahme (Ringpuffer, 15 min) ──► Ton- & Bildanalyse ─┐
@@ -13,22 +16,34 @@ Clip ──► Whisper-Untertitel ──► Schnitt an Satzgrenzen ──► Fac
 
 ## Was es kann
 
-- **Mehrere Streamer gleichzeitig** – URL rein, fertig. Sobald jemand live geht, startet die Aufnahme automatisch.
-  Es wird nur geclippt, wenn Kategorie/Titel "GTA" enthält (einstellbar).
+- **Mehrere Streamer gleichzeitig** – nur den Handle eintragen (z.B. `papaplatte`), Plattform wählen, fertig.
+  Sobald jemand live geht, startet die Aufnahme automatisch. Optional nur bei bestimmten Kategorien (z.B. „gta“).
 - **Hype-Erkennung** aus 5 Signalen, jeweils gegen den *eigenen* Normalpegel des Streamers gemessen
   (funktioniert bei 500 und bei 50.000 Zuschauern gleich):
   - Chat-Tempo, Anzahl verschiedener Chatter, Emotes/Slang (KEKW, LUL, 💀, „digga“, „was zur“ …),
     „clip it“-Rufe
   - Lautstärke-Spitzen (Schreien, Lachen) und Bildbewegung (Action, Explosionen) – **auch ohne Chat**
+- **Regler Chat ↔ Stream**: wie stark der Chat zählt und wie stark die Reaktion des Streamers (Ton/Bild),
+  plus Feinregler für jedes Signal. Wirkt sofort, auch bei laufenden Streams.
+- **Filter gegen leere Chat-Ausbrüche**: Chat beantwortet nur eine Frage (ja/nein/Zahlen/Namen), Raids,
+  Sub-Geschenkwellen, Bot-Befehle (`!giveaway`) und Spam ohne Reaktion im Stream werden aussortiert. Zusätzlich
+  prüft das Transkript, ob der Streamer kurz vorher den Chat etwas gefragt hat. Aussortiertes bleibt unter
+  *Clips → Aussortiert* sichtbar und lässt sich per Klick doch rendern.
+- **Spezial-Momente** auch ohne großen Hype: 🥚 Easter Eggs & Geheimnisse, 🤖 Glitches & Bugs, 😶 plötzliche
+  Stille (Spannung – der Chat hält die Luft an).
 - **Chat-Verzögerung** wird automatisch geschätzt, damit der Clip den Moment *vor* der Chat-Reaktion enthält.
 - **Hochformat 1080×1920**: Facecam wird automatisch erkannt → oben Facecam, unten Gameplay. Der
   Gameplay-Ausschnitt folgt der Action (geglättet) und hält die Facecam raus. Ohne Facecam: Smart-Crop.
   Facecam kann pro Streamer auch einmal von Hand eingezeichnet werden (zuverlässigste Variante).
+- **Layouts pro Clip wählbar**: Facecam oben (klein/mittel/groß), **Facecam + Chat oben**, nur Gameplay,
+  **Gameplay + Chat**, ganzes Bild. Der Chat wird pro Clip mitgeschnitten (mit Namensfarben) und kann als
+  Overlay ins Video.
 - **Untertitel** Wort für Wort mit Hervorhebung (Shorts-Stil), **Hook-Text** in den ersten Sekunden,
   Credit „twitch.tv/name“, Lautstärke normalisiert.
 - **Titel, Caption, Hashtags** automatisch (Vorlagen oder optional lokales LLM über Ollama – kostenlos).
-- **Dashboard** im Browser, auch vom MacBook im selben WLAN: Live-Hype-Kurven, Clip-Queue mit Vorschau,
-  Titel bearbeiten, Layout ändern + neu rendern, **1-Klick-Upload** auf mehrere Accounts.
+- **Dashboard** im Apple-Stil (hell/dunkel automatisch), als Programmfenster oder im Browser, auch vom MacBook
+  und Handy: Live-Hype-Kurven, Clip-Liste mit großem Player (↑ ↓ zum Durchgehen), Titel bearbeiten, Layout ändern
+  + neu rendern, **1-Klick-Upload** auf mehrere Accounts.
 - **„Jetzt clippen“-Button** für Momente, die die Erkennung verpasst.
 - **VOD-Modus**: vergangene Streams nachträglich clippen (Twitch-VODs und YouTube-Aufzeichnungen inkl.
   Chat-Replay) – ideal, um die Einstellungen zu testen.
@@ -56,7 +71,7 @@ Clip ──► Whisper-Untertitel ──► Schnitt an Satzgrenzen ──► Fac
 ```bat
 python -m clipper shortcut
 ```
-legt „GTA Clipper“ auf dem Desktop und im Startmenü an. Doppelklick startet Überwachung + Dashboard in
+legt „ClipStream“ auf dem Desktop und im Startmenü an. Doppelklick startet Überwachung + Dashboard in
 einem eigenen Fenster (ohne Konsole). Beim Schließen fragt es nach, denn ohne laufendes Programm entstehen
 keine Clips. Das Dashboard bleibt trotzdem für den Mac unter `http://<PC-IP>:8686` erreichbar. Beim ersten
 Start fragt die Windows-Firewall einmal nach „pythonw.exe“: für **private Netzwerke** erlauben, sonst kommt
@@ -93,24 +108,26 @@ auf PC und Mac/Handy installieren – dann ist das Dashboard überall erreichbar
 ## Benutzung
 
 ```bash
-python -m clipper add https://www.twitch.tv/streamer1
-python -m clipper add https://www.youtube.com/@streamer2 --name "Streamer Zwei"
-python -m clipper add https://kick.com/streamer3
-python -m clipper            # Dashboard + Überwachung starten
+python -m clipper add papaplatte                 # Twitch (Standard)
+python -m clipper add @MontanaBlack              # @ = YouTube
+python -m clipper add trymacs --platform kick    # oder: kick:trymacs
+python -m clipper                                # Dashboard + Überwachung starten
 ```
-Streamer lassen sich genauso im Dashboard (Tab **Streamer**) hinzufügen.
+Ganze Links gehen weiterhin. Im Dashboard (Tab **Streamer**) einfach Plattform antippen und Handle eintragen.
 
 | Tab | Was du dort machst |
 |---|---|
-| **Live** | Status aller Streamer, Hype-Score in Echtzeit mit Kurve der letzten Minuten, Chat/min, „✂ Jetzt clippen“ |
-| **Clips** | Fertige Clips ansehen, Titel/Hook/Caption/Hashtags anpassen, Accounts anhaken, **⬆ Hochladen**. „Warum dieser Clip?“ zeigt Signale, Top-Chat-Nachrichten und Transkript |
-| **Streamer** | Auslöse-Score, Max. Clips/Stunde, Länge, Sprache, Layout, **Facecam einzeichnen**, Standard-Upload-Ziele |
+| **Live** | Status aller Streamer, Hype-Score in Echtzeit mit Kurve, Chat/Min., „Jetzt clippen“ |
+| **Clips** | Liste links, großer Player rechts. Titel/Hook/Caption/Hashtags anpassen (speichert automatisch), Accounts antippen, **Hochladen**. Layout + Facecam-Größe ändern → „Neu rendern“. Filter *Aussortiert* zeigt, was der Filter weggelassen hat |
+| **Streamer** | Antippen zum Aufklappen: Empfindlichkeit, Sprache, Layout, Facecam-Größe, **Facecam einzeichnen**, Upload-Ziele |
 | **Accounts** | YouTube/TikTok/Instagram verbinden |
+| **Einstellungen** | Regler Chat ↔ Stream, Empfindlichkeit, Feinregler, Filter + Strenge, Spezial-Momente, Standard-Layout, Chat einblenden, Kategorie-Filter, Hashtags |
 
 **Sprache:** Pro Streamer unter *Sprache*. *Englisch* → englische Untertitel **und** englische Titel, Hooks
 und Hashtags. *Automatisch* → Whisper erkennt die Sprache selbst (Titel-Vorlagen dann deutsch).
 
-**Tuning:** Zu viele schwache Clips → *Auslöse-Score* hoch (z. B. 80). Zu wenige → runter (65).
+**Tuning** (Einstellungen): Zu viele Clips von bloßem Chat-Gespamme → Regler Richtung *Stream* und/oder
+Filter-*Strenge* hoch. Zu viele schwache Clips → *Empfindlichkeit* Richtung „Weniger“. Zu wenige → Richtung „Mehr“.
 Die ersten ~3 Minuten jedes Streams lernt das Tool den normalen Pegel und clippt noch nichts.
 
 **VOD-Modus** (vergangenen Stream clippen):
@@ -167,16 +184,20 @@ Für eure **eigenen** Accounts reicht der Entwicklungsmodus der App – kein App
 Pro Sekunde werden fünf Werte gemessen und mit einem robusten z-Score gegen die letzten 10 Minuten
 verglichen („wie ungewöhnlich ist das gerade für *diesen* Stream?“):
 
-| Signal | Gewicht |
+| Signal | Gruppe |
 |---|---|
-| Chat-Nachrichten pro 5 s | 35 % |
-| Emotes/Slang (lustig, Hype, Schock, Fail) | 25 % |
-| Verschiedene Chatter | 15 % |
-| Lautstärke-Spitzen | 15 % |
-| Bildbewegung | 10 % |
+| Chat-Nachrichten pro 5 s | Chat |
+| Emotes/Slang (lustig, Hype, Schock, Fail, Easter Egg, Glitch) | Chat |
+| Verschiedene Chatter | Chat |
+| Lautstärke-Spitzen | Stream |
+| Bildbewegung | Stream |
 | „clip“-Rufe im Chat | Bonus |
 
-Daraus entsteht der **Hype-Score 0–100**. Ab 72 (einstellbar) startet ein Moment, unter 50 endet er.
+Der Regler *Chat ↔ Stream* verteilt das Gewicht zwischen den Gruppen (Standard 65 % / 35 %), die Feinregler
+innerhalb der Gruppen. Daraus entsteht der **Hype-Score 0–100**. Ab 72 (einstellbar) startet ein Moment.
+
+Danach prüft der **Filter** jeden Chat-Ausbruch: Wie viel davon sind Emotes/Lachen, wie viel kurze Antworten,
+hat der Streamer selbst reagiert, gab es einen Raid? Bot-Befehle und bekannte Bots zählen gar nicht erst.
 Zusätzlich gibt es einen **Stream-Moment-Pfad**: Extrem laut + viel Bewegung löst auch ohne Chat aus.
 Der Clip beginnt 18 s vor dem Moment (Kontext!) und wird nach dem Transkript an Satzgrenzen geschnitten.
 Kategorie (lustig/Hype/Schock/Fail/Action) bestimmt Titel-Vorlage und Hashtags.
@@ -192,8 +213,9 @@ Alle Gewichte, Emote-Listen und Schwellen stehen in `clipper/config.py` und kön
 ## Gut zu wissen
 
 - **Schriftliche Erlaubnis** der Streamer einholen (welche Plattformen, welche Accounts, Umsatzbeteiligung).
-- **Musik:** GTA-Radio und Hintergrundmusik im Stream können auf YouTube/Instagram/TikTok Copyright-Claims
-  oder Stummschaltungen auslösen. Clips mit lauter Radio-Musik vor dem Upload kurz checken.
+- **Musik:** Spiel-Radios (z.B. in GTA) und Hintergrundmusik im Stream können auf YouTube/Instagram/TikTok
+  Copyright-Claims oder Stummschaltungen auslösen. Clips mit lauter Musik vor dem Upload kurz checken.
+- **Passwörter** von Instagram/TikTok/YouTube braucht ClipStream nie – nur die offiziellen Logins (Tab Accounts).
 - Speicherbedarf: ca. 1 GB Puffer pro aktivem Streamer + ca. 20–40 MB pro fertigem Clip.
   Verworfene Clips werden gelöscht.
 - Absturz oder im Task-Manager beendet: Unter Windows enden die Aufnahmen (streamlink/ffmpeg) automatisch mit,

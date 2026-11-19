@@ -1,34 +1,32 @@
 "use strict";
 
-const $ = (sel, el = document) => el.querySelector(sel);
-const $$ = (sel, el = document) => [...el.querySelectorAll(sel)];
+/* ClipStream Dashboard – Live, Clips (Liste + Player), Streamer, Accounts, Einstellungen */
+
+const $ = (s, el = document) => el.querySelector(s);
+const $$ = (s, el = document) => [...el.querySelectorAll(s)];
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const icon = (id) => `<svg><use href="#i-${id}"/></svg>`;
+
 const state = {
-  tab: "live", status: null, info: null, accounts: [], streamers: [],
-  clipStatus: "ready", clipStreamer: "", clipSort: "new", editing: null, connected: true,
+  view: "live", info: null, status: null, streamers: [], accounts: [], clips: [], settings: null,
+  clipFilter: "ready", clipStreamer: "", selected: null, detailSig: "", addPlatform: "twitch", openStreamers: new Set(),
 };
 
-const CAT = { funny: "😂 Lustig", hype: "🔥 Hype", shock: "😳 Schock", fail: "💀 Fail", action: "💥 Action" };
-const CLIP_STATUS = { queued: "In Warteschlange", processing: "Wird verarbeitet", ready: "Bereit", failed: "Fehler",
-  uploaded: "Hochgeladen", discarded: "Verworfen" };
-const PF_SHORT = { youtube: "YT", tiktok: "TT", instagram: "IG" };
-const TABS = ["live", "clips", "streamers", "accounts"];
-const LAYOUTS = [["", "Layout: Auto"], ["stack", "Facecam oben"], ["crop", "Nur Gameplay"], ["blur", "Ganzes Bild + Blur"]];
-const EMPTY_CLIPS = { ready: "Gerade keine Clips bereit", working: "Nichts in Arbeit", uploaded: "Noch nichts hochgeladen",
-  failed: "Keine Fehler 🎉", all: "Noch keine Clips" };
-
-const icon = (id, cls = "") => `<svg class="i ${cls}"><use href="#i-${id}"/></svg>`;
-const scene = (n) => `<svg class="scene"><use href="#scene-${"abc"[Math.abs(Number(n) || 0) % 3]}"/></svg>`;
-const fmtNum = (n) => Number(n || 0).toLocaleString("de-DE");
-const fmtSec = (s) => `${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, "0")}`;
-const isLive = (s) => s.status === "live" || s.status === "paused";
-const scoreClass = (s) => (s >= 85 ? "" : s >= 70 ? "mid" : "low");
+const CAT = { funny: "😂 Lustig", hype: "🔥 Hype", shock: "😳 Schock", fail: "💀 Fail", action: "💥 Action",
+  easteregg: "🥚 Easter Egg", glitch: "🤖 Glitch", spannung: "😶 Spannung" };
+const LAYOUTS = [["auto", "Automatisch"], ["stack", "Facecam oben"], ["stack_chat", "Facecam + Chat oben"],
+  ["crop", "Nur Gameplay"], ["crop_chat", "Gameplay + Chat"], ["blur", "Ganzes Bild"]];
+const CLIP_STATUS = { queued: "Wartet", processing: "Wird verarbeitet", ready: "Bereit", failed: "Fehler",
+  uploaded: "Hochgeladen", filtered: "Aussortiert", discarded: "Verworfen" };
+const SOURCE = { auto: "", vod: "VOD", manual: "Manuell", special: "Spezial-Moment" };
+const PF = { twitch: "Twitch", youtube: "YouTube", kick: "Kick", local: "Test", tiktok: "TikTok", instagram: "Instagram" };
 
 async function api(method, url, body) {
-  const res = await fetch(url, { method, headers: body ? { "Content-Type": "application/json" } : {}, body: body ? JSON.stringify(body) : undefined });
+  const res = await fetch(url, { method, headers: body ? { "Content-Type": "application/json" } : {},
+    body: body ? JSON.stringify(body) : undefined });
   if (!res.ok) {
     let msg = res.statusText;
-    try { msg = (await res.json()).detail || msg; } catch (_) { /* ignore */ }
+    try { msg = (await res.json()).detail || msg; } catch (_) { /* leer */ }
     throw new Error(msg);
   }
   return res.json();
@@ -39,569 +37,467 @@ function toast(msg, err = false) {
   t.textContent = msg;
   t.className = "show" + (err ? " err" : "");
   clearTimeout(t._h);
-  t._h = setTimeout(() => (t.className = ""), 3500);
+  t._h = setTimeout(() => (t.className = ""), 2600);
 }
 
 const ago = (ts) => {
   const s = Math.max(0, Date.now() / 1000 - ts);
   if (s < 60) return "gerade eben";
-  if (s < 3600) return `vor ${Math.floor(s / 60)} min`;
-  if (s < 86400) return `vor ${Math.floor(s / 3600)} h`;
-  return new Date(ts * 1000).toLocaleDateString("de-DE");
+  if (s < 3600) return `vor ${Math.floor(s / 60)} Min.`;
+  if (s < 86400) return `vor ${Math.floor(s / 3600)} Std.`;
+  return new Date(ts * 1000).toLocaleDateString("de-DE", { day: "numeric", month: "short" });
 };
-const dur = (s) => (s < 3600 ? `${Math.floor(s / 60)} min`
-  : `${Math.floor(s / 3600)}:${String(Math.floor((s % 3600) / 60)).padStart(2, "0")} h`);
+const since = (ts) => {
+  const s = Math.max(0, Date.now() / 1000 - ts);
+  return s < 3600 ? `${Math.floor(s / 60)} Min.` : `${Math.floor(s / 3600)}:${String(Math.floor((s % 3600) / 60)).padStart(2, "0")} Std.`;
+};
+const streamerById = (id) => state.streamers.find((s) => s.id === id) || {};
+// Empfindlichkeit: Regler links = weniger Clips (hohe Schwelle), rechts = mehr Clips
+const triggerToSlider = (t) => Math.round(Math.min(100, Math.max(0, (90 - t) / 0.35)));
+const sliderToTrigger = (v) => Math.round(90 - v * 0.35);
 
-function setText(root, key, value) {
-  const el = root.querySelector(`[data-k="${key}"]`);
-  if (el && el.textContent !== String(value)) el.textContent = value;
-  return el;
-}
-function setCount(sel, value) {
-  const el = $(sel);
-  el.hidden = !value;
-  el.textContent = value || "";
-}
-const streamerById = (id) => state.streamers.find((s) => s.id === id)
-  || (state.status ? state.status.streamers.find((s) => s.id === id) : null);
+/* ================================================================== Navigation */
+$$("nav a").forEach((a) => a.addEventListener("click", () => show(a.dataset.view)));
+document.addEventListener("click", (e) => { const g = e.target.closest("[data-goto]"); if (g) show(g.dataset.goto); });
 
-/** Liste an Daten angleichen, ohne vorhandene Elemente neu zu bauen (verhindert Flackern). */
-function syncList(box, items, create, update) {
-  const keep = new Set(items.map((x) => String(x.id)));
-  $$(":scope > [data-id]", box).forEach((el) => { if (!keep.has(el.dataset.id)) el.remove(); });
-  items.forEach((x, i) => {
-    let el = box.querySelector(`:scope > [data-id="${x.id}"]`);
-    if (!el) { el = create(x); el.dataset.id = x.id; }
-    if (box.children[i] !== el) box.insertBefore(el, box.children[i] || null);
-    update(el, x);
-  });
-}
-
-/* ------------------------------------------------------------------ Navigation */
-$$(".nav").forEach((a) => a.addEventListener("click", () => showTab(a.dataset.tab)));
-document.addEventListener("click", (e) => {
-  const go = e.target.closest("[data-go]");
-  if (go) { e.preventDefault(); closeDrawer(); showTab(go.dataset.go); }
-});
-document.addEventListener("keydown", (e) => { if (e.key === "Escape" && state.editing) closeDrawer(); });
-window.addEventListener("hashchange", () => {
-  const tab = location.hash.slice(1);
-  if (TABS.includes(tab) && tab !== state.tab) { closeDrawer(); showTab(tab); }
-});
-
-function showTab(tab) {
-  state.tab = tab;
-  $$(".nav").forEach((b) => b.classList.toggle("active", b.dataset.tab === tab));
-  $$(".page").forEach((s) => s.classList.toggle("active", s.id === `p-${tab}`));
-  history.replaceState(null, "", `#${tab}`);
+function show(view) {
+  state.view = view;
+  $$("nav a").forEach((a) => a.classList.toggle("on", a.dataset.view === view));
+  $$(".view").forEach((v) => v.classList.toggle("on", v.id === `view-${view}`));
+  if (location.hash.slice(1) !== view) history.replaceState(null, "", `#${view}`);
   refresh();
 }
 
 async function refresh() {
   try {
-    if (state.tab === "live") { renderLive(); await loadLatest(); }
-    if (state.tab === "clips") await loadClips();
-    if (state.tab === "streamers") await loadStreamers();
-    if (state.tab === "accounts") await loadAccounts();
+    if (state.view === "live") await loadStatus();
+    if (state.view === "clips") await loadClips();
+    if (state.view === "streamers") await loadStreamers();
+    if (state.view === "accounts") await loadAccounts();
+    if (state.view === "settings") await loadSettings();
   } catch (e) { console.error(e); }
 }
 
-/* ------------------------------------------------------------------ Status (Seitenleiste, Zähler) */
+/* ================================================================== Status + Live */
 async function loadInfo() {
-  try { state.info = await api("GET", "/api/info"); } catch (_) { return; }
-  const lan = state.info.lan_url;
-  $("#sys-lan-row").hidden = !lan;
-  if (lan) $("#sys-lan").textContent = lan.replace(/^https?:\/\//, "");
-  $("#warn-pw").hidden = !(lan && !state.info.password);
+  try { state.info = await api("GET", "/api/info"); } catch (_) { state.info = null; }
 }
 
 async function loadStatus() {
-  let st;
-  try { st = await api("GET", "/api/status"); } catch (e) {
-    state.connected = false;
-    $("#sys-dot").className = "dot err";
-    $("#sys-state").textContent = "Keine Verbindung";
-    $("#sys-since").textContent = "";
-    throw e;
-  }
-  if (!state.connected) { state.connected = true; loadInfo(); }
+  const st = await api("GET", "/api/status");
   state.status = st;
-  const live = st.streamers.filter(isLive);
-  const c = st.clips || {};
-  setCount("#n-live", live.length ? `${live.length} live` : "");
-  setCount("#n-clips", c.ready || "");
-  setCount("#n-streamers", st.streamers.length || "");
-  setCount("#n-accounts", st.accounts || "");
-  $("#sys-dot").className = "dot ok";
-  $("#sys-state").textContent = "Läuft";
-  $("#sys-since").textContent = state.info ? ` · seit ${dur(Date.now() / 1000 - state.info.started)}` : "";
-  const working = Object.keys(st.processing).length;
-  $("#sys-work").textContent = working ? `${working} Clip${working > 1 ? "s" : ""} in Arbeit${st.queue ? ` · ${st.queue} wartend` : ""}`
-    : st.queue ? `${st.queue} Clips wartend` : "Leerlauf – nichts zu rendern";
-  const counts = { ready: c.ready, working: (c.queued || 0) + (c.processing || 0), uploaded: c.uploaded, failed: c.failed };
-  $$("#clip-filter i[data-c]").forEach((i) => { i.textContent = counts[i.dataset.c] || ""; });
+  const live = st.streamers.filter((s) => s.status === "live").length;
+  const ready = (st.clips || {}).ready || 0;
+  setBadge("#n-live", live);
+  setBadge("#n-clips", ready);
+  renderSidebar(st);
+  if (state.view === "live") renderLive(st);
+  return st;
 }
 
-/* ------------------------------------------------------------------ Live */
-function renderLive() {
-  const st = state.status;
-  if (!st) return;
-  const all = st.streamers;
-  const live = all.filter(isLive);
-  const off = all.filter((s) => !isLive(s));
-  $("#live-sub").textContent = all.length
-    ? `${all.length} Streamer ${all.length === 1 ? "wird" : "werden"} überwacht · ${live.length ? `${live.length} ${live.length === 1 ? "ist" : "sind"} gerade live` : "gerade ist niemand live"}`
-    : "Noch keine Streamer eingetragen";
-  $("#k-live").innerHTML = `${live.length} <small>/ ${all.length}</small>`;
-  $("#k-live-sub").textContent = live.map((s) => s.name).join(", ") || "niemand live";
-  $("#k-clips").textContent = all.reduce((a, s) => a + (s.clips_24h || 0), 0);
-  $("#k-clips-sub").textContent = `${fmtNum((st.clips || {}).uploaded)} hochgeladen insgesamt`;
-  const working = Object.keys(st.processing).length;
-  $("#k-work").innerHTML = `${working} <small>· ${st.queue} wartend</small>`;
-  $("#k-work-bar").classList.toggle("run", working > 0);
-  $("#k-ready").textContent = (st.clips || {}).ready || 0;
-  $("#live-empty").hidden = all.length > 0;
-  syncList($("#live-grid"), live, liveCard, updateLiveCard);
-  syncList($("#off-list"), off, offCard, updateOffCard);
+function setBadge(sel, n) { const b = $(sel); b.hidden = !n; b.textContent = n; }
+
+function renderSidebar(st) {
+  const working = Object.keys(st.processing || {}).length;
+  const info = state.info || {};
+  const lines = [];
+  lines.push(`<div><span class="dot green"></span>Läuft${info.started ? ` seit ${since(info.started)}` : ""}</div>`);
+  lines.push(`<div><span class="dot ${working ? "orange" : ""}"></span>${working ? `Rendert ${working} Clip${working > 1 ? "s" : ""}` : "Nichts zu rendern"}${st.queue ? ` · ${st.queue} wartend` : ""}</div>`);
+  if (info.lan_url) lines.push(`<div>${icon("wifi")}<span>${esc(info.lan_url.replace("http://", ""))}</span></div>`);
+  $("#sys-status").innerHTML = lines.join("");
+  $("#sys-warn").hidden = !!info.password || !info.lan_url;
 }
 
-function liveCard(s) {
-  const el = document.createElement("div");
-  el.className = "lc";
-  el.innerHTML = `
-    <div class="preview">${scene(s.id)}<img alt="">
-      <div class="top"><span class="pf ${esc(s.platform)}">${esc(s.platform)}</span><span class="pill" data-k="pill"></span><span class="pill glass" data-k="cat"></span></div>
-      <div class="bottom"><b>${esc(s.name)}</b><span data-k="title"></span></div></div>
-    <div class="body">
-      <div class="hype"><div class="num" data-k="numbox"><span data-k="num">0</span><small>HYPE</small></div>
-        <svg class="chart" viewBox="0 0 300 64" preserveAspectRatio="none"></svg></div>
-      <div class="stats"><div><b data-k="chat">0</b><span>Chat/min</span></div><div><b data-k="lag">–</b><span>Chat-Lag</span></div>
-        <div><b data-k="clips">0</b><span>Clips</span></div><div><b data-k="since">–</b><span>Live seit</span></div></div>
-      <div class="note" data-k="note"></div>
-      <div class="acts"><button class="btn primary" data-act="clip">${icon("cut")}Jetzt clippen</button>
-        <button class="btn" data-act="facecam" title="Facecam für diesen Streamer einzeichnen">${icon("cam")}Facecam</button></div>
-    </div>`;
-  el.querySelector('[data-act="clip"]').addEventListener("click", async () => {
-    try { await api("POST", `/api/streamers/${s.id}/clip`, { seconds: 45 }); toast("Clip der letzten 45 Sekunden wird erstellt …"); }
-    catch (e) { toast(e.message, true); }
-  });
-  el.querySelector('[data-act="facecam"]').addEventListener("click", () => openFacecam(streamerById(s.id) || s));
-  const img = el.querySelector("img");
-  img.addEventListener("load", () => img.classList.add("on"));
-  el._snap = 0;
-  return el;
+function renderLive(st) {
+  const grid = $("#live-grid");
+  $("#live-empty").hidden = st.streamers.length > 0;
+  const live = st.streamers.filter((s) => s.status === "live").length;
+  $("#live-sub").textContent = st.streamers.length ? `${live} von ${st.streamers.length} live` : "";
+  const seen = new Set();
+  for (const s of st.streamers) {
+    seen.add(String(s.id));
+    let card = grid.querySelector(`[data-id="${s.id}"]`);
+    if (!card) {
+      card = document.createElement("div");
+      card.className = "card live-card";
+      card.dataset.id = s.id;
+      grid.appendChild(card);
+    }
+    renderLiveCard(card, s);
+  }
+  $$(".live-card", grid).forEach((c) => { if (!seen.has(c.dataset.id)) c.remove(); });
 }
 
-function updateLiveCard(el, s) {
+function statusPill(s) {
+  const map = { live: ["red", "Live"], paused: ["orange", "Live · andere Kategorie"], live_other: ["orange", "Live · andere Kategorie"],
+    offline: ["", "Offline"], checking: ["", "Prüfe …"], error: ["red", "Fehler"], disabled: ["", "Pausiert"] };
+  const [c, t] = map[s.status] || ["", s.status];
+  return `<span class="pill"><span class="dot ${c}"></span>${t}</span>`;
+}
+
+function renderLiveCard(card, s) {
+  const live = s.status === "live" || s.status === "paused";
   const hype = Math.round(s.hype || 0);
   const trig = s.trigger || 72;
-  const paused = s.status === "paused";
-  const hot = hype >= trig && !paused;
-  const pill = setText(el, "pill", paused ? "LIVE · kein GTA" : "● LIVE");
-  pill.className = `pill ${paused ? "paused" : "live"}`;
-  setText(el, "cat", s.category || "").hidden = !s.category;
-  setText(el, "title", s.title || "");
-  setText(el, "num", hype);
-  el.querySelector('[data-k="numbox"]').classList.toggle("hotnum", hot);
-  el.classList.toggle("hot", hot);
-  setText(el, "chat", fmtNum(s.chat_per_min) + (s.chat_connected === false ? " ⚠" : ""));
-  setText(el, "lag", s.lag != null ? `${Number(s.lag).toFixed(1).replace(".", ",")} s` : "–");
-  setText(el, "clips", s.clips ?? 0);
-  setText(el, "since", s.started ? dur(Date.now() / 1000 - s.started) : "–");
-  let note = "", cls = "info";
-  if (s.recording === false) { note = "⚠ Aufnahme verbindet neu …"; cls = "warn"; }
-  else if (paused) { note = "Kein GTA in Titel/Kategorie – gerade wird nicht geclippt"; cls = "warn"; }
-  else if (s.warmup) { note = "⏳ Lernt den normalen Pegel (erste ~3 Minuten) – noch keine Clips"; }
-  else if (hot) { note = "🔥 Hype-Moment erkannt – Clip wird erstellt"; cls = "hot"; }
-  const n = setText(el, "note", note);
-  n.className = `note ${cls}`;
-  // Standbild aus dem Stream (wird serverseitig alle 30 s erneuert)
-  const img = el.querySelector("img");
-  const every = img.classList.contains("on") ? 30000 : 8000;
-  if (Date.now() - el._snap > every) {
-    el._snap = Date.now();
-    const url = `/api/streamers/${s.id}/snapshot?t=${Date.now()}`;
-    const pre = new Image();
-    pre.onload = () => { img.src = url; };
-    pre.src = url;
-  }
-  drawHistory(el.querySelector("svg.chart"), s.id, trig);
+  const sub = s.status === "error" ? (s.error || "Fehler") : [s.category, s.title].filter(Boolean).join(" · ");
+  card.innerHTML = `
+    <div class="top"><div class="avatar">${esc((s.name || "?")[0].toUpperCase())}</div>
+      <div class="who"><b>${esc(s.name)}</b><span class="pf">${PF[s.platform] || s.platform}</span></div>${statusPill(s)}</div>
+    <div class="sub" title="${esc(sub)}">${esc(sub) || "&nbsp;"}</div>
+    ${live ? `
+      <div class="hype"><div class="num" style="color:${hype >= trig ? "var(--accent)" : "inherit"}">${hype}<small>${s.warmup ? "lernt Chat-Pegel …" : "Hype"}</small></div><canvas></canvas></div>
+      <div class="stats"><span><b>${s.chat_per_min ?? 0}</b> Chat/Min.${s.chat_connected ? "" : " ⚠"}</span><span><b>${s.clips ?? 0}</b> Clips</span><span>seit <b>${s.started ? since(s.started) : "–"}</b></span></div>
+      ${s.recording === false ? `<div class="small" style="color:var(--orange)">Aufnahme verbindet neu …</div>` : ""}
+      <div class="actions"><button class="btn primary" data-act="clip">${icon("scissors")}Jetzt clippen</button></div>`
+    : `<div class="stats"><span><b>${s.clips_24h ?? 0}</b> Clips in 24 Std.</span></div>
+       <div class="actions"><button class="btn" data-act="check">Jetzt prüfen</button></div>`}`;
+  const btn = card.querySelector("[data-act]");
+  btn?.addEventListener("click", async () => {
+    try {
+      if (btn.dataset.act === "clip") { await api("POST", `/api/streamers/${s.id}/clip`, { seconds: 45 }); toast("Clip der letzten 45 Sek. wird erstellt"); }
+      else { await api("POST", `/api/streamers/${s.id}/check`); toast("Prüfe, ob live …"); }
+    } catch (e) { toast(e.message, true); }
+  });
+  if (live) drawHistory(card.querySelector("canvas"), s.id, trig);
 }
 
 const histCache = {};
-async function drawHistory(svg, id, trig) {
-  let h = histCache[id];
-  if (!h || (!h.loading && Date.now() - h.t > 4000)) {
-    h = histCache[id] = { points: h ? h.points : [], t: Date.now(), loading: true };
-    try { h.points = (await api("GET", `/api/streamers/${id}/history`)).points; } catch (_) { /* ignore */ }
-    h.loading = false;
+async function drawHistory(canvas, id, trig) {
+  const now = Date.now();
+  if (!histCache[id] || now - histCache[id].t > 4000) {
+    try { histCache[id] = { t: now, points: (await api("GET", `/api/streamers/${id}/history`)).points }; } catch (_) { return; }
   }
-  paintChart(svg, h.points, trig, id);
+  const pts = histCache[id].points.slice(-600);
+  const dpr = window.devicePixelRatio || 1, w = canvas.clientWidth, h = canvas.clientHeight;
+  if (!w || !h) return;
+  canvas.width = w * dpr; canvas.height = h * dpr;
+  const ctx = canvas.getContext("2d");
+  ctx.scale(dpr, dpr);
+  const css = getComputedStyle(document.documentElement);
+  const ty = h - (trig / 100) * h;
+  ctx.strokeStyle = css.getPropertyValue("--line2"); ctx.setLineDash([3, 3]); ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(0, ty); ctx.lineTo(w, ty); ctx.stroke(); ctx.setLineDash([]);
+  if (pts.length < 2) return;
+  const accent = css.getPropertyValue("--accent").trim();
+  ctx.beginPath();
+  pts.forEach((p, i) => { const x = (i / (pts.length - 1)) * w, y = h - (p[1] / 100) * h; i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); });
+  ctx.strokeStyle = accent; ctx.lineWidth = 1.6; ctx.stroke();
+  ctx.lineTo(w, h); ctx.lineTo(0, h); ctx.closePath();
+  ctx.globalAlpha = 0.1; ctx.fillStyle = accent; ctx.fill(); ctx.globalAlpha = 1;
 }
 
-function paintChart(svg, pts, trig, id) {
-  const w = 300, hh = 64;
-  const n = pts.length;
-  let line = "";
-  if (n >= 2) {
-    const step = Math.max(1, Math.floor(n / 150));
-    const s = [];
-    for (let i = 0; i < n; i += step) s.push(pts[i]);
-    if (s[s.length - 1] !== pts[n - 1]) s.push(pts[n - 1]);
-    line = s.map((p, i) => `${i ? "L" : "M"}${(i / (s.length - 1) * w).toFixed(1)} ${(hh - Math.max(0, Math.min(100, p[1])) / 100 * hh).toFixed(1)}`).join(" ");
-  }
-  const ty = (hh - (trig / 100) * hh).toFixed(1);
-  svg.innerHTML = `<defs>
-      <linearGradient id="ha${id}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ff3d7f" stop-opacity=".4"/><stop offset="1" stop-color="#ff9f43" stop-opacity="0"/></linearGradient>
-      <linearGradient id="hl${id}" x1="0" x2="1"><stop offset="0" stop-color="#ff9f43"/><stop offset="1" stop-color="#ff3d7f"/></linearGradient></defs>
-    <line x1="0" x2="${w}" y1="${ty}" y2="${ty}" stroke="#ffffff30" stroke-dasharray="4 4" vector-effect="non-scaling-stroke"/>
-    <text x="${w - 2}" y="${Math.max(9, ty - 4)}" fill="#ffffff55" font-size="9" text-anchor="end">Auslöser ${trig}</text>
-    ${line ? `<path d="${line} L${w} ${hh} L0 ${hh}Z" fill="url(#ha${id})"/>
-    <path d="${line}" fill="none" stroke="url(#hl${id})" stroke-width="2" vector-effect="non-scaling-stroke"/>`
-    : `<text x="4" y="${hh - 6}" fill="#ffffff40" font-size="9">Sammle Daten …</text>`}`;
-}
-
-function offCard(s) {
-  const el = document.createElement("div");
-  el.className = "off";
-  el.innerHTML = `<div class="avatar ${esc(s.platform)}">${esc((s.name || "?")[0])}</div>
-    <div class="info"><b>${esc(s.name)} <span class="pf ${esc(s.platform)}">${esc(s.platform)}</span></b><span data-k="txt"></span></div>
-    <button class="btn sm" data-act="check">Jetzt prüfen</button>`;
-  el.querySelector("[data-act]").addEventListener("click", async () => {
-    try { await api("POST", `/api/streamers/${s.id}/check`); toast("Prüfe Live-Status …"); } catch (e) { toast(e.message, true); }
-  });
-  return el;
-}
-
-function updateOffCard(el, s) {
-  let txt;
-  if (!s.enabled) txt = "Deaktiviert";
-  else if (s.status === "error") txt = `Fehler: ${s.error || "unbekannt"}`;
-  else if (s.status === "checking") txt = "Prüfe Live-Status …";
-  else if (s.status === "live_other") txt = "Live, aber kein GTA – wird nicht geclippt";
-  else txt = "Offline · wartet auf Stream-Start";
-  txt += ` · ${s.clips_24h || 0} Clip${s.clips_24h === 1 ? "" : "s"} in 24 h`;
-  setText(el, "txt", txt).classList.toggle("err", s.status === "error");
-}
-
-async function loadLatest() {
-  const clips = await api("GET", "/api/clips?status=all&limit=6");
-  $("#latest-wrap").hidden = !clips.length;
-  syncList($("#latest"), clips, clipCard, fillClipCard);
-}
-
-/* ------------------------------------------------------------------ Clips (Galerie) */
+/* ================================================================== Clips */
 $$("#clip-filter button").forEach((b) => b.addEventListener("click", () => {
-  state.clipStatus = b.dataset.status;
-  $$("#clip-filter button").forEach((x) => x.classList.toggle("active", x === b));
+  state.clipFilter = b.dataset.status;
+  $$("#clip-filter button").forEach((x) => x.classList.toggle("on", x === b));
+  state.selected = null;
   loadClips();
 }));
-$("#clip-streamer").addEventListener("change", (e) => { state.clipStreamer = e.target.value; loadClips(); });
-$("#clip-sort").addEventListener("change", (e) => { state.clipSort = e.target.value; loadClips(); });
+$("#clip-streamer").addEventListener("change", (e) => { state.clipStreamer = e.target.value; state.selected = null; loadClips(); });
 
 async function loadClips() {
-  let clips = await api("GET", `/api/clips?status=${state.clipStatus}&limit=120${state.clipStreamer ? `&streamer_id=${state.clipStreamer}` : ""}`);
-  if (state.clipSort === "score") clips = [...clips].sort((a, b) => (b.score || 0) - (a.score || 0));
+  const q = `status=${state.clipFilter}${state.clipStreamer ? `&streamer_id=${state.clipStreamer}` : ""}&limit=150`;
+  const [clips, accounts, streamers, st] = await Promise.all([api("GET", `/api/clips?${q}`), api("GET", "/api/accounts"),
+    api("GET", "/api/streamers"), loadStatus()]);
+  state.clips = clips; state.accounts = accounts; state.streamers = streamers;
+  const counts = st.clips || {};
+  const n = { ready: counts.ready || 0, working: (counts.queued || 0) + (counts.processing || 0) + (counts.failed || 0), uploaded: counts.uploaded || 0,
+    filtered: counts.filtered || 0 };
+  $$("#clip-filter button").forEach((b) => {
+    const label = { ready: "Bereit", working: "In Arbeit", uploaded: "Hochgeladen", filtered: "Aussortiert", all: "Alle" }[b.dataset.status];
+    const c = n[b.dataset.status];
+    b.innerHTML = esc(label) + (c ? `<em>${c}</em>` : "");
+  });
   const sel = $("#clip-streamer");
-  if (sel.options.length !== state.streamers.length + 1) {
-    sel.innerHTML = `<option value="">Alle Streamer</option>` + state.streamers.map((s) => `<option value="${s.id}">${esc(s.name)}</option>`).join("");
+  if (sel.options.length !== streamers.length + 1) {
+    sel.innerHTML = `<option value="">Alle Streamer</option>` + streamers.map((s) => `<option value="${s.id}">${esc(s.name)}</option>`).join("");
     sel.value = state.clipStreamer;
   }
-  syncList($("#gallery"), clips, clipCard, fillClipCard);
-  $("#clips-empty").hidden = clips.length > 0;
-  $("#clips-empty-h").textContent = EMPTY_CLIPS[state.clipStatus] || EMPTY_CLIPS.all;
+  renderClipList();
+  if (state.selected && !clips.some((c) => c.id === state.selected)) state.selected = null;
+  if (!state.selected && clips.length && window.innerWidth > 860) state.selected = clips[0].id;
+  renderDetail();
 }
 
-function clipCard(c) {
-  const el = document.createElement("div");
-  el.className = "tc";
-  el.addEventListener("click", () => openClip(Number(el.dataset.id)));
-  return el;
+function scoreClass(s) { return s >= 85 ? "hi" : s >= 70 ? "mid" : ""; }
+
+function renderClipList() {
+  const list = $("#clip-list");
+  const empty = { ready: "Keine fertigen Clips – sobald jemand live ist, landen sie hier.", working: "Gerade wird nichts gerendert.",
+    uploaded: "Noch nichts hochgeladen.", filtered: "Nichts aussortiert.", all: "Noch keine Clips." }[state.clipFilter];
+  $("#clips-empty").hidden = state.clips.length > 0;
+  $("#clips-empty-text").textContent = empty;
+  list.innerHTML = state.clips.map((c) => {
+    const st = streamerById(c.streamer_id);
+    const sub = [st.name, CAT[c.category] || c.category, c.status === "filtered" ? c.filter_reason : ago(c.created_at)].filter(Boolean).join(" · ");
+    const thumb = c.thumb_url ? `style="background-image:url('${c.thumb_url}')"` : "";
+    const busy = c.status === "queued" || c.status === "processing";
+    return `<div class="clip-row${c.id === state.selected ? " on" : ""}" data-id="${c.id}">
+      <div class="thumb" ${thumb}>${c.thumb_url ? "" : busy ? '<span class="spinner"></span>' : icon("film")}</div>
+      <div class="txt"><div class="t1">${esc(c.title || CLIP_STATUS[c.status])}</div><div class="t2">${esc(sub)}</div></div>
+      <span class="score ${scoreClass(c.score)}">${Math.round(c.score || 0)}</span></div>`;
+  }).join("");
+  $$(".clip-row", list).forEach((r) => r.addEventListener("click", () => selectClip(+r.dataset.id)));
 }
 
-function clipState(c) {
-  const ups = c.uploads || [];
-  if (c.status === "queued" || c.status === "processing") return `<span class="state work">⚙ ${esc(c.step || CLIP_STATUS[c.status])}</span>`;
-  if (c.status === "failed") return `<span class="state fail">✗ Fehler</span>`;
-  if (ups.some((u) => u.status === "uploading" || u.status === "pending")) return `<span class="state work">⬆ lädt hoch …</span>`;
-  const done = [...new Set(ups.filter((u) => u.status === "done").map((u) => u.platform))];
-  if (done.length) return `<span class="state up">${done.map((p) => `<span class="pf ${p}">${PF_SHORT[p] || esc(p)}</span>`).join("")} hochgeladen</span>`;
-  if (ups.some((u) => u.status === "failed")) return `<span class="state fail">✗ Upload fehlgeschlagen</span>`;
-  return `<span class="state">● Bereit</span>`;
+function selectClip(id) {
+  state.selected = id;
+  state.detailSig = "";
+  $$(".clip-row").forEach((r) => r.classList.toggle("on", +r.dataset.id === id));
+  $(`.clip-row[data-id="${id}"]`)?.scrollIntoView({ block: "nearest" });
+  $("#view-clips").classList.add("detail-open");
+  renderDetail();
 }
 
-function fillClipCard(el, c) {
-  const sig = JSON.stringify([c.status, c.thumb_url, c.step, c.title, c.score, (c.uploads || []).map((u) => u.status)]);
-  el.classList.toggle("sel", state.editing === c.id);
-  if (el._sig === sig) return;
-  el._sig = sig;
-  const work = c.status === "queued" || c.status === "processing";
-  const st = streamerById(c.streamer_id) || {};
-  el.innerHTML = `${c.thumb_url ? `<img src="${c.thumb_url}" alt="" loading="lazy">` : scene(c.id)}
-    ${c.thumb_url ? "" : `<div class="center">${work ? "Wird erstellt …" : esc(CLIP_STATUS[c.status] || "")}</div>`}
-    <div class="t"><span class="score ${scoreClass(c.score)}">${Math.round(c.score || 0)}</span>${c.duration ? `<span class="dur">${fmtSec(c.duration)}</span>` : ""}</div>
-    <div class="b"><b>${esc(c.title || CAT[c.category] || "Clip")}</b><span>${esc(st.name || "?")} · ${ago(c.created_at)}</span>${clipState(c)}</div>
-    ${work ? `<div class="progress"><div></div></div>` : ""}`;
+function clipSig(c) {
+  return c ? JSON.stringify([c.id, c.status, c.video_url, c.step, c.error, c.filter_reason, (c.uploads || []).map((u) => [u.status, u.url])]) : "";
 }
 
-/* ------------------------------------------------------------------ Clip-Editor */
-$("#drawer-bg").addEventListener("click", () => closeDrawer());
-
-async function openClip(id) {
-  let c;
-  try { c = await api("GET", `/api/clips/${id}`); } catch (e) { return toast(e.message, true); }
-  try { state.accounts = await api("GET", "/api/accounts"); } catch (_) { /* ignore */ }
-  state.editing = id;
-  renderDrawer(c);
-  document.body.classList.add("drawer-open");
-  $("#drawer").setAttribute("aria-hidden", "false");
-  $$(".tc").forEach((t) => t.classList.toggle("sel", Number(t.dataset.id) === id));
-}
-
-function closeDrawer() {
-  if (!state.editing) return;
-  state.editing = null;
-  document.body.classList.remove("drawer-open");
-  $("#drawer").setAttribute("aria-hidden", "true");
-  const v = $("#drawer video");
-  if (v) v.pause();
-  $$(".tc.sel").forEach((t) => t.classList.remove("sel"));
-}
-
-function videoHtml(c) {
-  if (c.video_url) return `<video src="${c.video_url}" poster="${c.thumb_url || ""}" controls preload="metadata" playsinline></video>`;
-  const work = c.status === "queued" || c.status === "processing";
-  return `<div class="vph">${scene(c.id)}<div class="center">${work ? `⚙ ${esc(c.step || "Wird erstellt …")}` : esc(CLIP_STATUS[c.status] || "")}</div></div>`;
-}
-
-function metaHtml(c) {
-  const st = streamerById(c.streamer_id) || {};
+function renderDetail() {
+  const pane = $("#clip-detail");
+  const c = state.clips.find((x) => x.id === state.selected);
+  const sig = clipSig(c);
+  if (sig === state.detailSig) return;
+  if (pane.contains(document.activeElement) && document.activeElement.matches("input, textarea, select")) return;
+  state.detailSig = sig;
+  if (!c) {
+    pane.innerHTML = `<div class="empty">${icon("film")}<p>Clip auswählen</p><p class="muted small">↑ ↓ wechseln · Leertaste abspielen</p></div>`;
+    $("#view-clips").classList.remove("detail-open");
+    return;
+  }
+  const st = streamerById(c.streamer_id);
   const bd = c.breakdown || {};
-  const stCls = { ready: "color:var(--ok)", failed: "color:var(--err)", uploaded: "color:var(--text)" }[c.status] || "color:var(--warn)";
-  return `<span class="score ${scoreClass(c.score)}">${Math.round(c.score || 0)}</span>
-    ${c.llm_score ? `<span class="tag" title="${esc(bd.llm_reason || "")}">KI ${c.llm_score}/10</span>` : ""}
-    <span class="tag">${CAT[c.category] || esc(c.category || "")}</span><span class="tag">${esc(st.name || "?")}</span>
-    <span class="tag">${ago(c.created_at)}</span>${c.duration ? `<span class="tag">${fmtSec(c.duration)}</span>` : ""}
-    ${c.source === "manual" ? `<span class="tag">manuell</span>` : c.source === "vod" ? `<span class="tag">VOD</span>` : ""}
-    <span class="tag" style="${stCls}">● ${esc(CLIP_STATUS[c.status] || c.status)}${c.step ? ` · ${esc(c.step)}` : ""}</span>`;
+  const q = bd.quality || {};
+  const opts = Object.assign({ layout: "auto", cam_size: "m" }, (c.layout || {}).opts || {}, c.render_opts || {});
+  const busy = c.status === "queued" || c.status === "processing";
+  const targets = (st.upload_targets || []).length ? st.upload_targets : state.accounts.map((a) => a.id);
+  const meta = `<span class="score ${scoreClass(c.score)}">${Math.round(c.score || 0)}</span><span>` + [CAT[c.category] || esc(c.category),
+    esc(st.name || ""), c.duration ? `${Math.round(c.duration)} Sek.` : "", ago(c.created_at), SOURCE[c.source] || "",
+    c.llm_score ? `KI ${c.llm_score}/10` : ""].filter(Boolean).join(" · ") + "</span>";
+  const bar = (label, v) => `<span>${label}</span><div class="bar"><div style="width:${Math.max(0, Math.min(100, (v || 0) * 10))}%"></div></div><span>${(+v || 0).toFixed(1)}</span>`;
+  const pct = (v) => `${Math.round((v || 0) * 100)} %`;
+  pane.innerHTML = `
+    <button class="btn plain back" data-act="back">${icon("back")}Clips</button>
+    <div class="detail">
+      <div class="player">${c.video_url ? `<video src="${c.video_url}" poster="${c.thumb_url || ""}" controls playsinline preload="metadata"></video>`
+        : `<div class="ph"><div>${busy ? '<span class="spinner"></span>' : icon("film")}<span>${esc(CLIP_STATUS[c.status])}${c.step ? ` · ${esc(c.step)}` : ""}</span></div></div>`}</div>
+      <div class="form">
+        <div class="head"><h2>${esc(c.title || CLIP_STATUS[c.status])}</h2><div class="meta">${meta}</div></div>
+        ${c.status === "filtered" ? `<div class="banner yellow"><div class="grow"><b>Aussortiert:</b> ${esc(c.filter_reason || "")}</div>
+          <button class="btn" data-act="force">Trotzdem rendern</button></div>` : ""}
+        ${c.status === "failed" ? `<div class="banner red"><div class="grow">${esc(c.error || "Fehler")}</div></div>` : ""}
+        ${busy ? `<div class="banner blue"><span class="spinner"></span><div class="grow">${esc(CLIP_STATUS[c.status])}${c.step ? ` – ${esc(c.step)}` : " …"}</div></div>` : ""}
+        <div class="field"><label>Titel</label><input data-f="title" value="${esc(c.title)}" placeholder="Titel"></div>
+        <div class="field"><label>Einblendung am Anfang (Hook)</label><input data-f="hook" value="${esc(c.hook)}" placeholder="z.B. WARTE AUF DAS ENDE"></div>
+        <div class="field"><label>Caption</label><textarea data-f="caption" rows="4">${esc(c.caption)}</textarea></div>
+        <div class="field"><label>Hashtags</label><input data-f="hashtags" value="${esc((c.hashtags || []).join(" "))}"></div>
+        <div class="field"><label>Hochladen auf</label>
+          <div class="targets">${state.accounts.length ? state.accounts.map((a) => `<label class="chip${targets.includes(a.id) ? " on" : ""}"><input type="checkbox" value="${a.id}" ${targets.includes(a.id) ? "checked" : ""}>${esc(PF[a.platform] || a.platform)} · ${esc(a.name)}</label>`).join("")
+            : `<span class="muted small">Noch keine Accounts verbunden – <a href="#accounts" data-goto="accounts">verbinden</a>.</span>`}</div></div>
+        <div class="upload-bar"><button class="btn primary big" data-act="upload" ${c.video_url && state.accounts.length ? "" : "disabled"}>${icon("up")}Hochladen</button>
+          <div class="uploads">${uploadsHtml(c.uploads)}</div></div>
+        <div class="layout-box">
+          <div class="inline"><b style="flex:1">Layout</b>
+            <select data-o="layout">${LAYOUTS.map(([v, l]) => `<option value="${v}" ${opts.layout === v ? "selected" : ""}>${l}</option>`).join("")}</select></div>
+          <div class="inline"><span class="muted small" style="flex:1">Facecam-Größe</span>
+            <div class="seg" data-o="cam_size">${[["s", "Klein"], ["m", "Mittel"], ["l", "Groß"]].map(([v, l]) => `<button type="button" data-v="${v}" class="${opts.cam_size === v ? "on" : ""}">${l}</button>`).join("")}</div></div>
+          <div class="inline"><span class="muted small" style="flex:1">Danach neu rendern (dauert ca. 20–60 Sek.)</span>
+            <button class="btn" data-act="rerender" ${busy ? "disabled" : ""}>${icon("redo")}Neu rendern</button></div>
+        </div>
+        <details class="why"><summary>Warum dieser Clip?</summary>
+          <div class="bars">${bar("Chat-Tempo", bd.chat_rate)}${bar("Emotes & Lachen", bd.emotes)}${bar("Verschiedene Chatter", bd.chatters)}${bar("Lautstärke", bd.audio)}${bar("Bewegung", bd.motion)}</div>
+          <p class="muted">${bd.mode === "stream" ? "Ausgelöst vom Stream (Ton/Bild)." : "Ausgelöst vom Chat."}
+            ${q.messages ? ` ${q.messages} Nachrichten · Emotes/Lachen ${pct(q.hype_ratio)} · Antworten ${pct(q.answer_ratio)} · Reaktion im Stream ${(q.stream_reaction || 0).toFixed(1)}` : ""}
+            ${bd.clip_requests ? ` · ${bd.clip_requests}× „Clip“ im Chat` : ""}${bd.special_mentions ? ` · ${bd.special_mentions} Erwähnungen` : ""}${bd.silence_seconds ? ` · ${bd.silence_seconds} Sek. Stille` : ""}
+            ${bd.vod_time ? ` · VOD-Zeit ${Math.floor(bd.vod_time / 60)}:${String(bd.vod_time % 60).padStart(2, "0")}` : ""}</p>
+          ${(c.chat_sample || []).length ? `<div class="chat-sample">${c.chat_sample.map(([t, n]) => `<div>${n}× ${esc(t)}</div>`).join("")}</div>` : ""}
+          ${c.transcript ? `<p>${esc(c.transcript)}</p>` : ""}
+        </details>
+        <div class="foot-actions">
+          ${c.video_url ? `<a class="btn plain" href="${c.video_url}" download>${icon("down")}Herunterladen</a>` : ""}
+          <span class="spacer"></span>
+          <button class="btn plain danger" data-act="discard">${icon("trash")}Verwerfen</button>
+        </div>
+      </div>
+    </div>`;
+  bindDetail(pane, c);
 }
 
 function uploadsHtml(ups) {
   return (ups || []).map((u) => {
-    const link = u.url && u.url.startsWith("http") ? `<a href="${esc(u.url)}" target="_blank" rel="noopener">${esc(u.url)}</a>` : esc(u.url || "");
-    const label = { pending: "wartet", uploading: "lädt hoch …", done: "✓ hochgeladen", failed: "✗ fehlgeschlagen" }[u.status] || esc(u.status);
-    return `<div><span class="pf ${esc(u.platform)}">${PF_SHORT[u.platform] || esc(u.platform)}</span><b>${esc(u.account_name)}</b>
-      <span class="st-${esc(u.status)}">${label}</span>${link}${u.error ? `<span class="st-failed">${esc(u.error)}</span>` : ""}</div>`;
+    const link = u.url && u.url.startsWith("http") ? `<a href="${esc(u.url)}" target="_blank" rel="noopener">öffnen</a>` : esc(u.url || "");
+    const label = { pending: "wartet", uploading: "lädt hoch …", done: "✓ hochgeladen", failed: "✗ fehlgeschlagen" }[u.status] || u.status;
+    return `<div>${esc(PF[u.platform] || u.platform)} · ${esc(u.account_name)}: <span class="st-${u.status}">${label}</span> ${link} ${u.error ? `<span class="st-failed">${esc(u.error)}</span>` : ""}</div>`;
   }).join("");
 }
 
-function renderDrawer(c) {
-  const d = $("#drawer");
-  const st = streamerById(c.streamer_id) || {};
-  const targets = st.upload_targets && st.upload_targets.length ? st.upload_targets : state.accounts.map((a) => a.id);
-  const bd = c.breakdown || {};
-  const bar = (label, v) => `<span>${label}</span><div class="b"><div style="width:${Math.max(0, Math.min(100, (v || 0) * 10))}%"></div></div><span>${Number(v || 0).toFixed(1).replace(".", ",")}</span>`;
-  d._clip = c;
-  d.innerHTML = `
-    <div class="vid"><div data-k="video">${videoHtml(c)}</div>
-      <a class="btn sm" data-k="dl" href="${c.video_url || "#"}" download ${c.video_url ? "" : "hidden"}>${icon("down", "xs")}Als MP4 speichern</a></div>
-    <div class="form">
-      <button class="close" type="button" data-act="close" title="Schließen (Esc)">${icon("x", "xs")}</button>
-      <h3>Clip #${c.id}</h3>
-      <div class="meta" data-k="meta">${metaHtml(c)}</div>
-      <div data-k="err">${c.error ? `<div class="error-box">${esc(c.error)}</div>` : ""}</div>
-      <label class="f">Titel <span class="saved" data-k="saved">✓ gespeichert</span></label><input type="text" data-f="title" value="${esc(c.title)}">
-      <label class="f">Hook <em>– Einblendung am Anfang, nach Änderung „Neu rendern“</em></label><input type="text" data-f="hook" value="${esc(c.hook)}">
-      <label class="f">Caption</label><textarea data-f="caption" rows="4">${esc(c.caption)}</textarea>
-      <label class="f">Hashtags</label><input type="text" data-f="hashtags" value="${esc((c.hashtags || []).join(" "))}">
-      <label class="f">Hochladen auf</label>
-      <div class="targets">${state.accounts.length ? state.accounts.map((a) => `<label class="tg"><input type="checkbox" value="${a.id}" ${targets.includes(a.id) ? "checked" : ""}><span class="ck"></span><span class="pf ${esc(a.platform)}">${PF_SHORT[a.platform] || esc(a.platform)}</span>${esc(a.name)}</label>`).join("")
-        : `<span class="small muted">Noch keine Accounts verbunden – <a href="#accounts" data-go="accounts">jetzt verbinden</a>.</span>`}</div>
-      <div class="upload-row">
-        <button class="btn primary big" data-act="upload">${icon("up")}<span data-k="uplabel"></span></button>
-        <select data-k="layout" title="Layout">${LAYOUTS.map(([v, l]) => `<option value="${v}" ${(c.layout_override || "") === v ? "selected" : ""}>${l}</option>`).join("")}</select>
-        <button class="btn" data-act="rerender">${icon("redo")}Neu rendern</button>
-        <button class="btn danger" data-act="discard">${icon("trash")}Verwerfen</button>
-      </div>
-      <div class="uploads" data-k="uploads">${uploadsHtml(c.uploads)}</div>
-      <div class="why"><h4>Warum dieser Clip?</h4>
-        <div class="bars">${bar("Chat-Tempo", bd.chat_rate)}${bar("Emotes", bd.emotes)}${bar("Chatter", bd.chatters)}${bar("Lautstärke", bd.audio)}${bar("Bewegung", bd.motion)}</div>
-        <p>${bd.clip_requests ? `„Clip“-Rufe im Chat: ${bd.clip_requests} · ` : ""}Auslöser: ${bd.mode === "stream" ? "Stream (Ton/Bild)" : c.source === "manual" ? "von Hand" : "Chat"} · Chat-Lag ${bd.lag ?? "–"} s${bd.vod_time ? ` · VOD-Zeit ${fmtSec(bd.vod_time)}` : ""}</p>
-        ${(c.chat_sample || []).length ? `<div class="chat">${c.chat_sample.map(([t, n]) => `<span>${n}× ${esc(t)}</span>`).join("")}</div>` : ""}
-        ${c.transcript ? `<p>${esc(c.transcript)}</p>` : ""}
-      </div>
-    </div>`;
-  updateUploadButton();
-  d.querySelector('[data-act="close"]').addEventListener("click", closeDrawer);
-  $$(".targets input", d).forEach((i) => i.addEventListener("change", updateUploadButton));
-  $$("[data-f]", d).forEach((i) => i.addEventListener("change", () => saveClip(c.id).catch((e) => toast(e.message, true))));
-  d.querySelector('[data-act="upload"]').addEventListener("click", async () => {
-    const ids = $$(".targets input:checked", d).map((i) => +i.value);
+function fieldValues(pane) {
+  const v = (f) => pane.querySelector(`[data-f="${f}"]`).value;
+  return { title: v("title"), hook: v("hook"), caption: v("caption"),
+    hashtags: v("hashtags").split(/\s+/).filter(Boolean).map((h) => (h.startsWith("#") ? h : "#" + h)) };
+}
+
+function bindDetail(pane, c) {
+  const save = async () => {
+    try {
+      const upd = await api("PATCH", `/api/clips/${c.id}`, fieldValues(pane));
+      Object.assign(c, upd);
+      const row = $(`.clip-row[data-id="${c.id}"] .t1`);
+      if (row) row.textContent = upd.title || "";
+    } catch (e) { toast(e.message, true); }
+  };
+  $$("[data-f]", pane).forEach((el) => el.addEventListener("change", save));
+  $$(".chip input", pane).forEach((i) => i.addEventListener("change", () => i.parentElement.classList.toggle("on", i.checked)));
+  $$('.seg[data-o] button', pane).forEach((b) => b.addEventListener("click", () => {
+    $$("button", b.parentElement).forEach((x) => x.classList.toggle("on", x === b));
+  }));
+  const act = (name, fn) => pane.querySelector(`[data-act="${name}"]`)?.addEventListener("click", fn);
+  act("back", () => { $("#view-clips").classList.remove("detail-open"); state.selected = null; state.detailSig = ""; renderClipList(); });
+  act("upload", async () => {
+    const ids = $$(".chip input:checked", pane).map((i) => +i.value);
     if (!ids.length) return toast("Mindestens einen Account auswählen", true);
     try {
-      await saveClip(c.id);
+      await save();
       await api("POST", `/api/clips/${c.id}/upload`, { account_ids: ids });
       toast("Upload gestartet");
-      setTimeout(refreshDrawer, 1000);
+      setTimeout(loadClips, 1200);
     } catch (e) { toast(e.message, true); }
   });
-  d.querySelector('[data-act="rerender"]').addEventListener("click", async () => {
+  const rerender = async (msg) => {
     try {
-      await saveClip(c.id);
-      await api("POST", `/api/clips/${c.id}/rerender`, { layout: d.querySelector('[data-k="layout"]').value || null });
-      toast("Wird neu gerendert …");
-      refreshDrawer();
+      await save();
+      const layout = pane.querySelector('[data-o="layout"]').value;
+      const cam = pane.querySelector('[data-o="cam_size"] .on')?.dataset.v || "m";
+      await api("POST", `/api/clips/${c.id}/rerender`, { layout, cam_size: cam });
+      toast(msg);
+      state.detailSig = "";
+      loadClips();
     } catch (e) { toast(e.message, true); }
-  });
-  d.querySelector('[data-act="discard"]').addEventListener("click", async () => {
+  };
+  act("rerender", () => rerender("Wird neu gerendert …"));
+  act("force", () => rerender("Wird trotzdem gerendert …"));
+  act("discard", async () => {
     if (!confirm("Clip verwerfen und Dateien löschen?")) return;
-    try { await api("DELETE", `/api/clips/${c.id}`); closeDrawer(); toast("Verworfen"); refresh(); } catch (e) { toast(e.message, true); }
+    await api("DELETE", `/api/clips/${c.id}`);
+    const idx = state.clips.findIndex((x) => x.id === c.id);
+    state.clips.splice(idx, 1);
+    state.selected = state.clips[Math.min(idx, state.clips.length - 1)]?.id ?? null;
+    state.detailSig = "";
+    toast("Verworfen");
+    renderClipList(); renderDetail();
   });
 }
 
-function updateUploadButton() {
-  const d = $("#drawer"), c = d._clip;
-  if (!c) return;
-  const n = $$(".targets input:checked", d).length;
-  const btn = d.querySelector('[data-act="upload"]');
-  btn.disabled = !c.video_url || !n;
-  setText(d, "uplabel", !c.video_url ? "Erst nach dem Rendern" : !state.accounts.length ? "Erst Account verbinden"
-    : n ? `Auf ${n} Account${n > 1 ? "s" : ""} hochladen` : "Account auswählen");
-}
-
-async function saveClip(id) {
-  const d = $("#drawer");
-  const v = (f) => d.querySelector(`[data-f="${f}"]`).value;
-  await api("PATCH", `/api/clips/${id}`, { title: v("title"), hook: v("hook"), caption: v("caption"),
-    hashtags: v("hashtags").split(/\s+/).filter(Boolean).map((h) => (h.startsWith("#") ? h : "#" + h)) });
-  const s = d.querySelector('[data-k="saved"]');
-  s.classList.add("show");
-  clearTimeout(s._h);
-  s._h = setTimeout(() => s.classList.remove("show"), 1800);
-}
-
-/** Status, Video und Uploads im offenen Editor nachziehen – Eingabefelder bleiben unangetastet. */
-async function refreshDrawer() {
-  if (!state.editing) return;
-  const id = state.editing;
-  let c;
-  try { c = await api("GET", `/api/clips/${id}`); } catch (_) { return; }
-  const d = $("#drawer");
-  if (state.editing !== id || !d._clip) return;
-  const old = d._clip;
-  d._clip = c;
-  d.querySelector('[data-k="meta"]').innerHTML = metaHtml(c);
-  d.querySelector('[data-k="err"]').innerHTML = c.error ? `<div class="error-box">${esc(c.error)}</div>` : "";
-  d.querySelector('[data-k="uploads"]').innerHTML = uploadsHtml(c.uploads);
-  if (c.video_url !== old.video_url || (!c.video_url && c.step !== old.step)) {
-    d.querySelector('[data-k="video"]').innerHTML = videoHtml(c);
-    const dl = d.querySelector('[data-k="dl"]');
-    dl.hidden = !c.video_url;
-    dl.href = c.video_url || "#";
+document.addEventListener("keydown", (e) => {
+  if (state.view !== "clips" || e.target.matches("input, textarea, select") || e.metaKey || e.ctrlKey) return;
+  if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+    e.preventDefault();
+    const idx = state.clips.findIndex((c) => c.id === state.selected);
+    const next = state.clips[Math.max(0, Math.min(state.clips.length - 1, idx + (e.key === "ArrowDown" ? 1 : -1)))];
+    if (next) selectClip(next.id);
+  } else if (e.key === " ") {
+    const v = $("#clip-detail video");
+    if (v) { e.preventDefault(); v.paused ? v.play() : v.pause(); }
   }
-  updateUploadButton();
-}
+});
 
-/* ------------------------------------------------------------------ Streamer */
+/* ================================================================== Streamer */
+$$("#add-platform button").forEach((b) => b.addEventListener("click", () => {
+  state.addPlatform = b.dataset.pf;
+  $$("#add-platform button").forEach((x) => x.classList.toggle("on", x === b));
+  $('#add-streamer [name="url"]').placeholder = { twitch: "Handle, z.B. papaplatte", youtube: "Handle, z.B. @MontanaBlack", kick: "Handle, z.B. trymacs" }[b.dataset.pf];
+}));
 $("#add-streamer").addEventListener("submit", async (e) => {
   e.preventDefault();
   const f = new FormData(e.target);
   try {
-    const s = await api("POST", "/api/streamers", { url: f.get("url"), name: f.get("name"), language: f.get("language") });
-    toast(`${s.name} hinzugefügt (${s.platform}) – wird jetzt überwacht`);
+    const s = await api("POST", "/api/streamers", { url: f.get("url"), name: f.get("name"), platform: state.addPlatform });
+    toast(`${s.name} hinzugefügt (${PF[s.platform] || s.platform})`);
     e.target.reset();
-    await loadStreamers(true);
+    loadStreamers();
   } catch (err) { toast(err.message, true); }
 });
 
-async function refreshStreamerCache() {
-  try { state.streamers = await api("GET", "/api/streamers"); } catch (_) { /* ignore */ }
-}
-
-async function loadStreamers(force = false) {
+async function loadStreamers() {
   const [streamers, accounts] = await Promise.all([api("GET", "/api/streamers"), api("GET", "/api/accounts")]);
-  state.streamers = streamers;
-  state.accounts = accounts;
+  state.streamers = streamers; state.accounts = accounts;
   const list = $("#streamer-list");
-  if (!force && list.querySelector(".dirty")) return;
-  list.innerHTML = streamers.length ? "" : `<div class="empty-big"><div class="ico">${icon("users")}</div><h2>Noch keine Streamer</h2>
-    <p>Oben einen Twitch-, YouTube- oder Kick-Link einfügen. Der Clipper prüft jede Minute, ob jemand live ist.</p></div>`;
+  if (list.contains(document.activeElement) && document.activeElement.matches("input, select")) return;
+  list.innerHTML = streamers.length ? "" : `<div class="empty">${icon("users")}<p>Noch keine Streamer – oben Handle eintragen.</p></div>`;
   for (const s of streamers) list.appendChild(renderStreamer(s));
-}
-
-function statusPill(id) {
-  const s = state.status ? state.status.streamers.find((x) => x.id === id) : null;
-  if (!s) return "";
-  if (s.status === "live") return `<span class="pill live">● LIVE</span>`;
-  if (s.status === "paused" || s.status === "live_other") return `<span class="pill paused">LIVE · kein GTA</span>`;
-  if (s.status === "error") return `<span class="pill error" title="${esc(s.error || "")}">Fehler</span>`;
-  return `<span class="tag">${s.enabled === false ? "Deaktiviert" : "Offline"}</span>`;
 }
 
 function renderStreamer(s) {
   const el = document.createElement("div");
-  el.className = "sr";
+  el.className = "card streamer-card" + (state.openStreamers.has(s.id) ? " open" : "");
   const set = s.settings || {};
-  const det = set.detection || {};
+  const det = set.detection || {}, rnd = set.render || {}, tr = set.transcription || {};
   const fc = s.facecam === "none" ? "keine" : s.facecam ? "eingezeichnet" : "automatisch";
   const targets = s.upload_targets || [];
-  const opt = (list, cur) => list.map(([v, l]) => `<option value="${v}" ${(cur ?? "") === v ? "selected" : ""}>${l}</option>`).join("");
+  const trig = det.trigger_score;
+  const opt = (pairs, cur) => pairs.map(([v, l]) => `<option value="${v}" ${String(cur ?? "") === v ? "selected" : ""}>${l}</option>`).join("");
+  const layoutName = (LAYOUTS.find(([v]) => v === rnd.layout) || [null, "Standard-Layout"])[1];
+  const summary = [trig ? `Schwelle ${trig}` : "Standard-Empfindlichkeit", layoutName, `Facecam ${fc}`].join(" · ");
   el.innerHTML = `
-    <div class="avatar ${esc(s.platform)}">${esc((s.name || "?")[0])}</div>
-    <div>
-      <div class="nm"><b>${esc(s.name)}</b><span class="pf ${esc(s.platform)}">${esc(s.platform)}</span>${statusPill(s.id)}</div>
-      <a class="url" href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.url)}</a>
-      <div class="set">
-        <label><span>Auslöse-Score</span><input type="number" min="40" max="99" data-s="detection.trigger_score" value="${det.trigger_score ?? ""}" placeholder="72"></label>
-        <label><span>Max. Clips/Std</span><input type="number" min="1" max="60" data-s="detection.max_clips_per_hour" value="${det.max_clips_per_hour ?? ""}" placeholder="10"></label>
-        <label><span>Max. Länge (s)</span><input type="number" min="15" max="180" data-s="clips.max_seconds" value="${(set.clips || {}).max_seconds ?? ""}" placeholder="60"></label>
-        <label title="Sprache der Untertitel. Bei Englisch sind auch Titel, Hook und Hashtags englisch."><span>Sprache</span><select data-s="transcription.language">${opt([["", "Standard"], ["de", "Deutsch"], ["en", "Englisch"], ["auto", "Automatisch"], ["tr", "Türkisch"], ["ar", "Arabisch"]], (set.transcription || {}).language)}</select></label>
-        <label><span>Layout</span><select data-s="render.layout">${opt([["", "Auto"], ["stack", "Facecam oben"], ["crop", "Nur Gameplay"], ["blur", "Ganzes Bild + Blur"]], (set.render || {}).layout)}</select></label>
-        <label><span>Facecam: ${fc}</span><button type="button" class="btn sm" data-act="facecam">${icon("cam", "xs")}Einzeichnen …</button></label>
-      </div>
-      <div class="tgt"><span>Standard-Upload-Ziele</span><div class="targets">${state.accounts.length
-        ? state.accounts.map((a) => `<label class="tg"><input type="checkbox" value="${a.id}" ${targets.includes(a.id) ? "checked" : ""}><span class="ck"></span><span class="pf ${esc(a.platform)}">${PF_SHORT[a.platform] || esc(a.platform)}</span>${esc(a.name)}</label>`).join("")
-        : `<span class="small muted">Noch keine Accounts – ohne Auswahl sind beim Upload alle vorausgewählt.</span>`}</div></div>
-    </div>
-    <div class="side">
-      <label class="switch"><input type="checkbox" data-act="enabled" ${s.enabled ? "checked" : ""}><span class="sw"></span>Aktiv</label>
-      <button class="btn primary sm" data-act="save" hidden>Speichern</button>
-      <button class="btn sm danger" data-act="delete">${icon("trash", "xs")}Entfernen</button>
-    </div>`;
-  $$("input, select", el).forEach((i) => i.addEventListener("change", () => {
-    el.classList.add("dirty");
-    el.querySelector('[data-act="save"]').hidden = false;
+    <div class="head"><div class="avatar">${esc(s.name[0].toUpperCase())}</div>
+      <div class="who"><b>${esc(s.name)}</b> <span class="pf">${PF[s.platform] || s.platform}</span><span class="summary">${esc(summary)}</span></div>
+      <svg class="chev"><use href="#i-back"/></svg>
+      <label class="switch" title="Überwachen"><input type="checkbox" data-k="enabled" ${s.enabled ? "checked" : ""}><span></span></label></div>
+    <div class="row-item"><div class="lbl"><b>Empfindlichkeit</b><small>${trig ? `Eigene Einstellung (Schwelle ${trig})` : "Wie in den Einstellungen"}</small></div>
+      <div style="flex:1;max-width:320px"><div class="slider-row"><span>Weniger</span><input type="range" min="0" max="100" data-k="trigger" value="${triggerToSlider(trig || (state.settings?.["detection.trigger_score"] ?? 72))}"><span>Mehr Clips</span></div></div>
+      ${trig ? `<button class="btn plain" data-k="trigger-reset">Standard</button>` : ""}</div>
+    <div class="row-item"><div class="lbl"><b>Sprache</b><small>Untertitel und Titel</small></div>
+      <select data-s="transcription.language">${opt([["", "Standard"], ["de", "Deutsch"], ["en", "Englisch"], ["auto", "Automatisch"], ["tr", "Türkisch"], ["ar", "Arabisch"]], tr.language)}</select></div>
+    <div class="row-item"><div class="lbl"><b>Layout</b><small>Für neue Clips dieses Streamers</small></div>
+      <select data-s="render.layout">${opt([["", "Standard"], ...LAYOUTS], rnd.layout)}</select></div>
+    <div class="row-item"><div class="lbl"><b>Facecam-Größe</b></div>
+      <select data-s="render.cam_size">${opt([["", "Standard"], ["s", "Klein"], ["m", "Mittel"], ["l", "Groß"]], rnd.cam_size)}</select></div>
+    <div class="row-item"><div class="lbl"><b>Facecam</b><small>${fc}</small></div>
+      <button class="btn" data-k="facecam">${icon("camera")}Einzeichnen …</button></div>
+    <div class="row-item col"><div class="lbl"><b>Standard-Upload-Ziele</b><small>Ohne Auswahl sind beim Hochladen alle Accounts angehakt.</small></div>
+      <div class="targets">${state.accounts.length ? state.accounts.map((a) => `<label class="chip${targets.includes(a.id) ? " on" : ""}"><input type="checkbox" value="${a.id}" ${targets.includes(a.id) ? "checked" : ""}>${esc(PF[a.platform] || a.platform)} · ${esc(a.name)}</label>`).join("") : `<span class="muted small">Noch keine Accounts verbunden.</span>`}</div></div>
+    <div class="row-item"><span class="spacer"></span><button class="btn plain danger" data-k="delete">${icon("trash")}Entfernen</button></div>`;
+  const patch = async (body, msg = "Gespeichert") => {
+    try { await api("PATCH", `/api/streamers/${s.id}`, body); toast(msg); } catch (e) { toast(e.message, true); }
+  };
+  el.querySelector(".head").addEventListener("click", (e) => {
+    if (e.target.closest(".switch")) return;
+    el.classList.toggle("open");
+    if (el.classList.contains("open")) state.openStreamers.add(s.id); else state.openStreamers.delete(s.id);
+  });
+  el.querySelector('[data-k="enabled"]').addEventListener("change", (e) => patch({ enabled: e.target.checked }, e.target.checked ? "Wird überwacht" : "Pausiert"));
+  el.querySelector('[data-k="trigger"]').addEventListener("change", async (e) => {
+    await patch({ settings: { detection: { trigger_score: sliderToTrigger(+e.target.value) } } });
+    loadStreamers();
+  });
+  el.querySelector('[data-k="trigger-reset"]')?.addEventListener("click", async () => {
+    await patch({ settings: { detection: { trigger_score: null } } }, "Zurückgesetzt");
+    loadStreamers();
+  });
+  $$("[data-s]", el).forEach((sel) => sel.addEventListener("change", () => {
+    const [sec, key] = sel.dataset.s.split(".");
+    patch({ settings: { [sec]: { [key]: sel.value || null } } });
   }));
-  el.querySelector('[data-act="save"]').addEventListener("click", async () => {
-    const settings = {};
-    $$("[data-s]", el).forEach((i) => {
-      const [sec, key] = i.dataset.s.split(".");
-      settings[sec] = settings[sec] || {};
-      settings[sec][key] = i.value === "" ? null : (i.type === "number" ? +i.value : i.value);
-    });
-    const upload_targets = $$(".targets input:checked", el).map((i) => +i.value);
-    try {
-      await api("PATCH", `/api/streamers/${s.id}`, { settings, upload_targets, enabled: el.querySelector('[data-act="enabled"]').checked });
-      el.classList.remove("dirty");
-      toast("Gespeichert");
-      loadStreamers();
-    } catch (e) { toast(e.message, true); }
+  $$(".chip input", el).forEach((i) => i.addEventListener("change", () => {
+    i.parentElement.classList.toggle("on", i.checked);
+    patch({ upload_targets: $$(".chip input:checked", el).map((x) => +x.value) });
+  }));
+  el.querySelector('[data-k="facecam"]').addEventListener("click", () => openFacecam(s));
+  el.querySelector('[data-k="delete"]').addEventListener("click", async () => {
+    if (!confirm(`${s.name} entfernen? Fertige Clips bleiben erhalten.`)) return;
+    await api("DELETE", `/api/streamers/${s.id}`);
+    loadStreamers();
   });
-  el.querySelector('[data-act="delete"]').addEventListener("click", async () => {
-    if (!confirm(`${s.name} entfernen? (Clips bleiben erhalten)`)) return;
-    try { await api("DELETE", `/api/streamers/${s.id}`); loadStreamers(true); } catch (e) { toast(e.message, true); }
-  });
-  el.querySelector('[data-act="facecam"]').addEventListener("click", () => openFacecam(s));
   return el;
 }
 
-/* ------------------------------------------------------------------ Facecam-Dialog */
+/* ================================================================== Facecam */
 let fc = { streamer: null, rect: null, drag: null };
 function openFacecam(s) {
   fc = { streamer: s, rect: s.facecam && s.facecam.w ? { ...s.facecam } : null, drag: null };
   $("#fc-name").textContent = s.name;
   const img = $("#fc-img");
-  img.onerror = () => { toast("Kein Bild verfügbar – Streamer muss live sein oder schon einen Clip haben", true); $("#facecam-dlg").close(); };
+  img.onerror = () => { toast("Kein Bild – der Streamer muss live sein oder schon einen Clip haben", true); $("#facecam-dlg").close(); };
   img.onload = drawFc;
   img.src = `/api/streamers/${s.id}/snapshot?t=${Date.now()}`;
   $("#facecam-dlg").showModal();
@@ -615,14 +511,14 @@ function drawFc() {
   const r = fc.rect, x = r.x * c.width, y = r.y * c.height, w = r.w * c.width, h = r.h * c.height;
   ctx.fillStyle = "rgba(0,0,0,.5)"; ctx.fillRect(0, 0, c.width, c.height);
   ctx.clearRect(x, y, w, h);
-  ctx.strokeStyle = "#ff3d7f"; ctx.lineWidth = 3; ctx.strokeRect(x, y, w, h);
+  ctx.strokeStyle = "#0a84ff"; ctx.lineWidth = 3; ctx.strokeRect(x, y, w, h);
 }
 const fcPos = (e) => { const b = $("#fc-canvas").getBoundingClientRect(); return { x: (e.clientX - b.left) / b.width, y: (e.clientY - b.top) / b.height }; };
 $("#fc-canvas").addEventListener("pointerdown", (e) => { fc.drag = fcPos(e); e.target.setPointerCapture(e.pointerId); });
 $("#fc-canvas").addEventListener("pointermove", (e) => {
   if (!fc.drag) return;
-  const p = fcPos(e), clamp = (v) => Math.max(0, Math.min(1, v));
-  fc.rect = { x: clamp(Math.min(p.x, fc.drag.x)), y: clamp(Math.min(p.y, fc.drag.y)), w: Math.abs(p.x - fc.drag.x), h: Math.abs(p.y - fc.drag.y) };
+  const p = fcPos(e), cl = (v) => Math.max(0, Math.min(1, v));
+  fc.rect = { x: cl(Math.min(p.x, fc.drag.x)), y: cl(Math.min(p.y, fc.drag.y)), w: Math.abs(p.x - fc.drag.x), h: Math.abs(p.y - fc.drag.y) };
   drawFc();
 });
 $("#fc-canvas").addEventListener("pointerup", () => (fc.drag = null));
@@ -630,9 +526,8 @@ async function saveFacecam(body) {
   try {
     await api("PUT", `/api/streamers/${fc.streamer.id}/facecam`, body);
     $("#facecam-dlg").close();
-    toast("Facecam gespeichert – gilt für neue Clips (alte: Neu rendern)");
-    await refreshStreamerCache();
-    if (state.tab === "streamers") loadStreamers(true);
+    toast("Facecam gespeichert – gilt für neue Clips");
+    loadStreamers();
   } catch (e) { toast(e.message, true); }
 }
 $("#fc-save").addEventListener("click", () => {
@@ -642,31 +537,19 @@ $("#fc-save").addEventListener("click", () => {
 $("#fc-none").addEventListener("click", () => saveFacecam({ mode: "none" }));
 $("#fc-auto").addEventListener("click", () => saveFacecam({ mode: "auto" }));
 
-/* ------------------------------------------------------------------ Accounts */
+/* ================================================================== Accounts */
 async function loadAccounts() {
-  const accounts = await api("GET", "/api/accounts");
-  state.accounts = accounts;
-  $$(".conns").forEach((box) => {
-    const p = box.dataset.p;
-    box.innerHTML = accounts.filter((a) => a.platform === p).map((a) => `
-      <div class="conn"><div class="avatar ${p}">${esc((a.name || "?")[0])}</div>
-        <div><b>${esc(a.name)}</b><span>● verbunden ${ago(a.created_at)}</span></div>
-        <button data-del="${a.id}" title="Account trennen">${icon("x", "xs")}</button></div>`).join("");
-  });
+  state.accounts = await api("GET", "/api/accounts");
+  $("#account-list").innerHTML = state.accounts.length ? state.accounts.map((a) => `
+    <div class="row-item"><span class="pf">${esc(PF[a.platform] || a.platform)}</span><div class="lbl"><b>${esc(a.name)}</b><small>verbunden ${ago(a.created_at)}</small></div>
+      <button class="btn plain danger" data-del="${a.id}">Trennen</button></div>`).join("")
+    : `<div class="row-item"><span class="muted">Noch keine Accounts verbunden.</span></div>`;
   $$("[data-del]").forEach((b) => b.addEventListener("click", async () => {
     if (!confirm("Account trennen?")) return;
-    try { await api("DELETE", `/api/accounts/${b.dataset.del}`); loadAccounts(); } catch (e) { toast(e.message, true); }
+    await api("DELETE", `/api/accounts/${b.dataset.del}`);
+    loadAccounts();
   }));
 }
-$$("[data-copy]").forEach((b) => b.addEventListener("click", async () => {
-  const text = b.dataset.copy;
-  try { await navigator.clipboard.writeText(text); }
-  catch (_) {
-    const ta = Object.assign(document.createElement("textarea"), { value: text });
-    document.body.appendChild(ta); ta.select(); document.execCommand("copy"); ta.remove();
-  }
-  toast("Befehl kopiert – im Terminal im Projektordner einfügen");
-}));
 $("#ig-add").addEventListener("click", async () => {
   try { const r = await api("POST", "/api/accounts/instagram", { token: $("#ig-token").value }); toast(`Instagram ${r.name} verbunden`); $("#ig-token").value = ""; loadAccounts(); }
   catch (e) { toast(e.message, true); }
@@ -679,22 +562,112 @@ $("#tiktok-add").addEventListener("click", async () => {
   catch (e) { toast(e.message, true); }
 });
 
-/* ------------------------------------------------------------------ Start + Aktualisierung */
-let ticks = 0;
-async function tick() {
-  ticks++;
-  try { await loadStatus(); } catch (_) { return; }
-  try {
-    if (state.tab === "live") { renderLive(); if (ticks % 5 === 0) await loadLatest(); }
-    if (state.tab === "clips" && ticks % 3 === 0) await loadClips();
-    if (state.editing && ticks % 2 === 0) await refreshDrawer();
-    if (ticks % 15 === 0) await refreshStreamerCache();
-  } catch (e) { console.error(e); }
+/* ================================================================== Einstellungen */
+// Strenge des Filters (0-100) <-> drei Schwellen; 50 entspricht den Standardwerten
+const strictToFilter = (v) => ({ "filters.min_hype_ratio": +(0.10 + 0.30 * v / 100).toFixed(3),
+  "filters.max_answer_ratio": +(0.65 - 0.40 * v / 100).toFixed(3), "filters.min_stream_reaction": +(0.4 + 1.2 * v / 100).toFixed(2) });
+const filterToStrict = (s) => Math.round(Math.min(100, Math.max(0, ((s["filters.min_hype_ratio"] ?? 0.25) - 0.10) / 0.30 * 100)));
+const WEIGHTS = [["chat_rate", "Chat-Tempo"], ["emotes", "Emotes & Lachen"], ["chatters", "Verschiedene Chatter"],
+  ["audio", "Lautstärke"], ["motion", "Bewegung im Bild"]];
+
+async function loadSettings() {
+  state.settings = await api("GET", "/api/settings");
+  renderSettings();
 }
 
+async function putSettings(patch, msg = "Gespeichert") {
+  try { state.settings = await api("PUT", "/api/settings", patch); toast(msg); } catch (e) { toast(e.message, true); }
+}
+
+function renderSettings() {
+  const s = state.settings;
+  const share = s["detection.stream_share"] ?? 35;
+  const w = s["detection.weights"] || {};
+  const cats = s["special.categories"] || [];
+  const sw = (key, checked) => `<label class="switch"><input type="checkbox" data-b="${key}" ${checked ? "checked" : ""}><span></span></label>`;
+  const balance = (v) => `${100 - v} % Chat · ${v} % Stream`;
+  $("#settings").innerHTML = `
+    <h3 class="group-title">Erkennung</h3>
+    <div class="group">
+      <div class="row-item col"><div class="lbl"><b>Worauf achten?</b><small id="bal-label">${balance(share)}</small></div>
+        <div class="slider-row"><span>Chat</span><input type="range" min="0" max="100" step="5" data-r="share" value="${share}"><span>Stream</span></div>
+        <small class="muted">Richtung Stream: Momente zählen nur, wenn der Streamer selbst reagiert (lauter, Action im Bild). Richtung Chat: der Chat entscheidet.</small></div>
+      <div class="row-item col"><div class="lbl"><b>Empfindlichkeit</b><small>Schwelle ${s["detection.trigger_score"] ?? 72} – einzelne Streamer können abweichen</small></div>
+        <div class="slider-row"><span>Weniger</span><input type="range" min="0" max="100" data-r="trigger" value="${triggerToSlider(s["detection.trigger_score"] ?? 72)}"><span>Mehr Clips</span></div></div>
+      <div class="row-item"><div class="lbl"><b>Höchstens Clips pro Stunde</b><small>pro Streamer, darüber nur noch Ausnahme-Momente</small></div>
+        <input type="number" min="1" max="60" style="width:80px" data-n="detection.max_clips_per_hour" value="${s["detection.max_clips_per_hour"] ?? 10}"></div>
+      <div class="row-item col"><details><summary class="disclosure">Feinregler</summary>
+        <p class="muted small">Gewichtung innerhalb von Chat und Stream. Das Verhältnis Chat ↔ Stream bestimmt der Regler oben.</p>
+        ${WEIGHTS.map(([k, l]) => `<div class="slider-row" style="grid-template-columns:150px 1fr 40px;margin:6px 0"><span>${l}</span><input type="range" min="0" max="100" step="5" data-w="${k}" value="${Math.round((w[k] ?? 0) * 100)}"><span data-wl="${k}">${Math.round((w[k] ?? 0) * 100)}</span></div>`).join("")}
+      </details></div>
+    </div>
+
+    <h3 class="group-title">Filter</h3>
+    <div class="group">
+      <div class="row-item"><div class="lbl"><b>Leere Chat-Ausbrüche aussortieren</b><small>z.B. wenn der Chat nur eine Frage beantwortet, bei Raids oder Bot-Spam. Aussortiertes landet unter Clips → Aussortiert.</small></div>${sw("filters.enabled", s["filters.enabled"])}</div>
+      <div class="row-item col"><div class="lbl"><b>Strenge</b></div>
+        <div class="slider-row"><span>Locker</span><input type="range" min="0" max="100" step="5" data-r="strict" value="${filterToStrict(s)}"><span>Streng</span></div></div>
+      <div class="row-item"><div class="lbl"><b>Fragen an den Chat erkennen</b><small>Prüft im Transkript, ob der Streamer kurz vorher den Chat etwas gefragt hat</small></div>${sw("filters.question_check", s["filters.question_check"])}</div>
+    </div>
+
+    <h3 class="group-title">Spezial-Momente</h3>
+    <div class="group">
+      <div class="row-item"><div class="lbl"><b>Spezial-Momente clippen</b><small>Auch ohne großen Hype</small></div>${sw("special.enabled", s["special.enabled"])}</div>
+      <div class="row-item"><div class="lbl"><b>🥚 Easter Eggs & Geheimnisse</b><small>Chat schreibt „Easter Egg“, „secret“, „Referenz“ …</small></div>${sw("cat:easteregg", cats.includes("easteregg"))}</div>
+      <div class="row-item"><div class="lbl"><b>🤖 Glitches & Bugs</b><small>Chat schreibt „glitch“, „bug“, „kaputt“ …</small></div>${sw("cat:glitch", cats.includes("glitch"))}</div>
+      <div class="row-item"><div class="lbl"><b>😶 Plötzliche Stille</b><small>Sonst aktiver Chat wird still – Spannung, Story, alle schauen gebannt</small></div>${sw("special.silence", s["special.silence"])}</div>
+    </div>
+
+    <h3 class="group-title">Clips</h3>
+    <div class="group">
+      <div class="row-item"><div class="lbl"><b>Standard-Layout</b></div>
+        <select data-c="render.layout">${LAYOUTS.map(([v, l]) => `<option value="${v}" ${s["render.layout"] === v ? "selected" : ""}>${l}</option>`).join("")}</select></div>
+      <div class="row-item"><div class="lbl"><b>Facecam-Größe</b></div>
+        <div class="seg" data-g="render.cam_size">${[["s", "Klein"], ["m", "Mittel"], ["l", "Groß"]].map(([v, l]) => `<button type="button" data-v="${v}" class="${s["render.cam_size"] === v ? "on" : ""}">${l}</button>`).join("")}</div></div>
+      <div class="row-item"><div class="lbl"><b>Chat einblenden</b><small>Bei „Automatisch“: neben der Facecam bzw. über dem Gameplay</small></div>${sw("render.chat_overlay", s["render.chat_overlay"])}</div>
+      <div class="row-item"><div class="lbl"><b>Hook-Text am Anfang</b><small>z.B. „WARTE AUF DAS ENDE“</small></div>${sw("render.hook_text", s["render.hook_text"])}</div>
+      <div class="row-item"><div class="lbl"><b>Maximale Länge</b><small>Sekunden</small></div>
+        <input type="number" min="15" max="180" style="width:80px" data-n="clips.max_seconds" value="${s["clips.max_seconds"] ?? 60}"></div>
+    </div>
+
+    <h3 class="group-title">Allgemein</h3>
+    <div class="group">
+      <div class="row-item col"><div class="lbl"><b>Nur clippen bei Kategorie</b><small>Wörter aus Kategorie oder Stream-Titel, z.B. „gta, fortnite“. Leer = immer clippen.</small></div>
+        <input data-t="monitor.only_keywords" value="${esc((s["monitor.only_keywords"] || []).join(", "))}" placeholder="leer = alles"></div>
+      <div class="row-item col"><div class="lbl"><b>Hashtags</b><small>Kommen an jeden Clip, dazu automatisch Streamer und Kategorie</small></div>
+        <input data-t="hashtags" value="${esc((s.hashtags || []).join(" "))}"></div>
+    </div>`;
+  const root = $("#settings");
+  root.querySelector('[data-r="share"]').addEventListener("input", (e) => { $("#bal-label").textContent = balance(+e.target.value); });
+  root.querySelector('[data-r="share"]').addEventListener("change", (e) => putSettings({ "detection.stream_share": +e.target.value }));
+  root.querySelector('[data-r="trigger"]').addEventListener("change", async (e) => { await putSettings({ "detection.trigger_score": sliderToTrigger(+e.target.value) }); renderSettings(); });
+  root.querySelector('[data-r="strict"]').addEventListener("change", (e) => putSettings(strictToFilter(+e.target.value)));
+  $$("[data-w]", root).forEach((r) => {
+    r.addEventListener("input", () => { root.querySelector(`[data-wl="${r.dataset.w}"]`).textContent = r.value; });
+    r.addEventListener("change", () => putSettings({ "detection.weights": Object.fromEntries($$("[data-w]", root).map((x) => [x.dataset.w, +x.value / 100])) }));
+  });
+  $$("[data-b]", root).forEach((c) => c.addEventListener("change", () => {
+    const k = c.dataset.b;
+    if (k.startsWith("cat:")) {
+      putSettings({ "special.categories": $$('[data-b^="cat:"]', root).filter((x) => x.checked).map((x) => x.dataset.b.slice(4)) });
+    } else putSettings({ [k]: c.checked });
+  }));
+  $$("[data-n]", root).forEach((n) => n.addEventListener("change", () => putSettings({ [n.dataset.n]: +n.value })));
+  $$("[data-c]", root).forEach((sel) => sel.addEventListener("change", () => putSettings({ [sel.dataset.c]: sel.value })));
+  $$("[data-t]", root).forEach((t) => t.addEventListener("change", () => putSettings({ [t.dataset.t]: t.value })));
+  $$(".seg[data-g] button", root).forEach((b) => b.addEventListener("click", () => {
+    $$("button", b.parentElement).forEach((x) => x.classList.toggle("on", x === b));
+    putSettings({ [b.parentElement.dataset.g]: b.dataset.v });
+  }));
+}
+
+/* ================================================================== Start */
 (async () => {
-  await Promise.all([loadInfo(), refreshStreamerCache(), loadStatus().catch(() => {})]);
+  await loadInfo();
+  try { state.settings = await api("GET", "/api/settings"); } catch (_) { /* egal */ }
+  loadStatus().catch(() => {});
   const initial = location.hash.slice(1);
-  showTab(TABS.includes(initial) ? initial : "live");
-  setInterval(tick, 2000);
+  show(["live", "clips", "streamers", "accounts", "settings"].includes(initial) ? initial : "live");
+  setInterval(() => { if (state.view === "live") loadStatus().catch(() => {}); }, 2000);
+  setInterval(() => { if (state.view === "clips") loadClips().catch(() => {}); else if (state.view !== "live") loadStatus().catch(() => {}); }, 5000);
 })();

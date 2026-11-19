@@ -12,7 +12,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-from .config import data_path, streamer_config
+from .chatlog import save_clip_chat
+from .config import data_path, effective_config
 from .db import DB
 from .detector import Detector
 from .platforms import LiveInfo, Platform
@@ -23,7 +24,7 @@ log = logging.getLogger("clipper.session")
 
 
 def matches_keywords(info: LiveInfo, keywords: list[str]) -> bool:
-    if not keywords:
+    if not keywords or info.extra.get("any_category"):
         return True
     text = f"{info.category or ''} {info.title or ''}".lower()
     if not text.strip():
@@ -132,7 +133,7 @@ class LiveSession:
         self.platform = platform
         self.info = info
         self.base_cfg = cfg
-        self.cfg = streamer_config(cfg, streamer)
+        self.cfg = effective_config(cfg, db, streamer)
         self.db = db
         self.processor = processor
         self.on_end = on_end
@@ -141,7 +142,7 @@ class LiveSession:
         self.dir = data_path(cfg, "buffer", self.slug, self.started.strftime("%Y%m%d-%H%M%S"))
         self.dir.mkdir(parents=True, exist_ok=True)
         self.wall0 = time.time()
-        self.timeline = Timeline(self.cfg["keywords"])
+        self.timeline = Timeline(self.cfg["keywords"], self.cfg.get("chat_filter"))
         self.analyzer = MediaAnalyzer(cfg, self.timeline)
         delays = self.cfg["detection"]["chat_delay"]
         self.detector = Detector(self.timeline, self.cfg, delays.get(platform.name, 5), on_event=self._on_event)
@@ -227,7 +228,7 @@ class LiveSession:
                             paused = not matches_keywords(info, self.cfg["monitor"].get("only_keywords") or [])
                             if paused != self.paused:
                                 log.info("%s: %s (%s)", self.streamer["name"],
-                                         "pausiert – kein GTA" if paused else "GTA erkannt – clippe wieder",
+                                         "pausiert – andere Kategorie" if paused else "passende Kategorie – clippe wieder",
                                          info.category or info.title)
                             self.paused = paused
                     except Exception as exc:  # noqa: BLE001
@@ -322,15 +323,36 @@ class LiveSession:
                 if t < -5:
                     continue
                 self.chat_connected = True
-                self.timeline.add_chat(max(t, 0.0), msg.author, msg.text)
+                if msg.kind != "msg":
+                    log.info("%s: %s im Chat – Chat-Ausbrüche der nächsten Sekunden werden nicht geclippt",
+                             self.streamer["name"], "Raid" if msg.kind == "raid" else "Sub-Geschenkwelle")
+                    self.timeline.add_noise(max(t, 0.0), msg.kind)
+                    continue
+                self.timeline.add_chat(max(t, 0.0), msg.author, msg.text, msg.color)
                 self.chat_times.append(time.time())
         except Exception as exc:  # noqa: BLE001
             log.warning("%s: Chat-Thread beendet: %s", self.streamer["name"], exc)
 
     # ------------------------------------------------------------------ detection
+    def _refresh_config(self) -> None:
+        """Änderungen aus dem Dashboard (Regler, Filter, Empfindlichkeit) live übernehmen."""
+        streamer = self.db.get_streamer(self.streamer["id"]) or self.streamer
+        cfg = effective_config(self.base_cfg, self.db, streamer)
+        if cfg != self.cfg:
+            self.cfg = cfg
+            self.detector.update_config(cfg)
+            log.info("%s: neue Einstellungen übernommen", self.streamer["name"])
+
     def _detect_loop(self) -> None:
         last_lag = time.time()
+        last_cfg = time.time()
         while not self.stop_evt.wait(1):
+            if time.time() - last_cfg > 10:
+                last_cfg = time.time()
+                try:
+                    self._refresh_config()
+                except Exception:  # noqa: BLE001
+                    log.exception("Einstellungen konnten nicht neu geladen werden")
             av = self.timeline.av_until
             until = av - 2
             if self.chat_connected:
@@ -348,11 +370,15 @@ class LiveSession:
 
     def _on_event(self, ev: dict) -> None:
         if self.paused and ev["source"] != "manual":
-            log.info("%s: Moment (Score %.0f) ignoriert – Stream ist gerade kein GTA", self.streamer["name"],
+            log.info("%s: Moment (Score %.0f) ignoriert – andere Kategorie als eingestellt", self.streamer["name"],
                      ev["score"])
             return
-        log.info("%s: Hype-Moment erkannt! Score %.0f (%s) bei %.0fs", self.streamer["name"], ev["score"],
-                 ev["category"], ev["peak"])
+        if ev.get("filtered"):
+            log.info("%s: Moment bei %.0fs aussortiert: %s", self.streamer["name"], ev["peak"], ev["filtered"])
+        else:
+            log.info("%s: %s erkannt! Score %.0f (%s) bei %.0fs", self.streamer["name"],
+                     "Spezial-Moment" if ev["source"] == "special" else "Hype-Moment", ev["score"],
+                     ev["category"], ev["peak"])
         with self.pending_lock:
             self.pending.append(ev)
 
@@ -393,14 +419,18 @@ class LiveSession:
         base = segs[0].start
         breakdown = dict(ev["breakdown"])
         breakdown["peak_raw"] = round(ev["peak"] - base, 2)
+        breakdown["event_start_raw"] = round(ev["start"] - base, 2)
+        save_clip_chat(work / "chat.json", self.timeline, start, end, self.detector.lag, base)
+        filtered = ev.get("filtered")
         cid = self.db.add_clip(
-            streamer_id=self.streamer["id"], status="queued", source=ev["source"],
+            streamer_id=self.streamer["id"], status="filtered" if filtered else "queued", source=ev["source"],
             stream_title=self.info.title, category=ev["category"], score=ev["score"], breakdown=breakdown,
             chat_sample=ev["chat_sample"], dir=str(work), raw_path=str(raw), raw_owned=1,
-            raw_start=round(max(0.0, start - base), 3), raw_end=round(end - base, 3),
+            raw_start=round(max(0.0, start - base), 3), raw_end=round(end - base, 3), filter_reason=filtered,
         )
-        self.clips_created += 1
-        self.processor.enqueue(cid)
+        if not filtered:
+            self.clips_created += 1
+            self.processor.enqueue(cid)
 
     # ------------------------------------------------------------------ status
     def status(self) -> dict:

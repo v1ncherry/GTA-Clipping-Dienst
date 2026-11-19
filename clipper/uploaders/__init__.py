@@ -14,7 +14,7 @@ PLATFORMS = ("youtube", "tiktok", "instagram")
 
 
 def texts_for(platform: str, clip: dict) -> dict:
-    title = clip.get("title") or "GTA 6 Clip"
+    title = clip.get("title") or "Stream-Highlight"
     tags = clip.get("hashtags") or []
     caption = clip.get("caption") or f"{title}\n\n{' '.join(tags)}"
     if platform == "youtube":

@@ -235,7 +235,7 @@ def compute_crop_path(cfg: dict, path: str, start: float, dur: float, src_w: int
         return [[0.0, int(center_x)]]
     frames = np.frombuffer(raw[:n * lw * lh], dtype=np.uint8).reshape(n, lh, lw).astype(np.float32)
     mask = np.ones((lh, lw), np.float32)
-    mask[int(0.70 * lh):, :int(0.22 * lw)] = 0     # GTA-Minimap unten links
+    mask[int(0.70 * lh):, :int(0.22 * lw)] = 0     # Minimap/HUD unten links (in vielen Spielen)
     for r in exclude or []:
         x, y, w, h = (int(v * s) for v in r)
         mask[max(0, y):y + h, max(0, x):x + w] = 0
@@ -294,20 +294,39 @@ def x_expression(keys: list[list[float]]) -> str:
 
 # --------------------------------------------------------------------------- Plan
 
+# Höhe der Facecam-Zeile oben (Anteil an 1920 px)
+CAM_SIZES = {"s": 0.25, "m": 0.33, "l": 0.42}
+CAM_CHAT_SIZES = {"s": 0.30, "m": 0.36, "l": 0.42}   # mit Chat daneben etwas höher, damit genug Zeilen passen
+LAYOUTS = ("auto", "stack", "stack_chat", "crop", "crop_chat", "blur")
+
+
 def plan_layout(cfg: dict, path: str, start: float, dur: float, info: dict, facecam_setting=None,
-                override: str | None = None) -> dict:
+                opts: dict | str | None = None) -> dict:
+    """Layout-Plan für den Clip.
+
+    opts: {"layout": auto|stack|stack_chat|crop|crop_chat|blur, "cam_size": s|m|l, "chat": bool}
+    "auto" nimmt Facecam oben (wenn erkannt) bzw. Gameplay; "chat" blendet dort zusätzlich den Chat ein.
+    """
+    if isinstance(opts, str):
+        opts = {"layout": opts}
+    opts = opts or {}
+    r = cfg["render"]
     src_w, src_h = info["width"], info["height"]
-    mode = override or cfg["render"].get("layout", "auto")
-    sub_pos = cfg["render"]["subtitles"].get("position", "auto")
+    mode = opts.get("layout") or r.get("layout", "auto")
+    mode = mode if mode in LAYOUTS else "auto"
+    size = opts.get("cam_size") or r.get("cam_size", "m")
+    size = size if size in CAM_SIZES else "m"
+    want_chat = bool(opts.get("chat", r.get("chat_overlay", False))) if mode == "auto" else mode.endswith("_chat")
+    sub_pos = r["subtitles"].get("position", "auto")
     if src_w <= src_h:   # schon Hochformat
         mode = "blur"
 
     cam = None
     focus_x = None
     if isinstance(facecam_setting, dict) and facecam_setting.get("w"):
-        r = facecam_setting
-        cam = [r["x"] * src_w, r["y"] * src_h, r["w"] * src_w, r["h"] * src_h]
-    elif facecam_setting != "none" and mode in ("auto", "stack", "crop"):
+        fc = facecam_setting
+        cam = [fc["x"] * src_w, fc["y"] * src_h, fc["w"] * src_w, fc["h"] * src_h]
+    elif facecam_setting != "none" and mode != "blur":
         try:
             frames = sample_frames(cfg, path, start, dur, src_w, src_h)
             found = detect_facecam(cfg, frames, src_w, src_h)
@@ -326,27 +345,37 @@ def plan_layout(cfg: dict, path: str, start: float, dur: float, info: dict, face
                 "sub_y": _sub_y(sub_pos, min(OUT_H - 380, top + fg_h + 140)),
                 "hook_y": max(160, top - 150), "credit": [40, top + fg_h + 50, 1]}
 
-    if cam and mode in ("auto", "stack"):
+    if cam and mode in ("auto", "stack", "stack_chat"):
         cx, cy, cw, ch = (int(round(v)) for v in cam)
         cw, ch = _even(min(cw, src_w - cx)), _even(min(ch, src_h - cy))
-        top_h = _even(min(900, max(540, OUT_W * ch / max(cw, 1))))
+        top_h = _even((CAM_CHAT_SIZES if want_chat else CAM_SIZES)[size] * OUT_H)
+        cam_w = _even(OUT_W * 0.56) if want_chat else OUT_W
         game_h = OUT_H - top_h
         gw, gh = _even(src_h * OUT_W / game_h), src_h
         if gw > src_w:
             gw, gh = src_w, _even(src_w * game_h / OUT_W)
         gy = (src_h - gh) // 2
         keys = compute_crop_path(cfg, path, start, dur, src_w, src_h, gw, exclude=[cam])
-        return {"type": "stack", "cam": [cx, cy, cw, ch], "top_h": top_h, "game": {"w": gw, "h": gh, "y": gy},
-                "x_keys": keys, "sub_y": _sub_y(sub_pos, top_h + int(0.27 * game_h)), "hook_y": top_h,
-                "credit": [30, top_h - 24, 1]}
+        plan = {"type": "stack", "cam": [cx, cy, cw, ch], "top_h": top_h, "cam_w": cam_w,
+                "game": {"w": gw, "h": gh, "y": gy}, "x_keys": keys,
+                "sub_y": _sub_y(sub_pos, top_h + int(0.27 * game_h)), "hook_y": top_h,
+                "credit": [30, top_h - 24, 1], "cam_size": size}
+        if want_chat:
+            plan["chat"] = {"x": cam_w, "y": 0, "w": OUT_W - cam_w, "h": top_h, "panel": True}
+        return plan
 
     gw, gh = _even(src_h * 9 / 16), src_h
     if gw > src_w:
         gw, gh = src_w, _even(src_w * 16 / 9)
     keys = compute_crop_path(cfg, path, start, dur, src_w, src_h, gw, exclude=[cam] if cam else None,
                              focus_x=focus_x)
-    return {"type": "crop", "game": {"w": gw, "h": gh, "y": (src_h - gh) // 2}, "x_keys": keys,
+    plan = {"type": "crop", "game": {"w": gw, "h": gh, "y": (src_h - gh) // 2}, "x_keys": keys,
             "sub_y": _sub_y(sub_pos, int(0.66 * OUT_H)), "hook_y": int(0.17 * OUT_H), "credit": [30, 130, 7]}
+    if want_chat:
+        # Chat-Box unten links über dem Gameplay (oberhalb der TikTok/Shorts-Bedienelemente), Untertitel darüber
+        plan["chat"] = {"x": 40, "y": 1190, "w": 700, "h": 340, "panel": False}
+        plan["sub_y"] = _sub_y(sub_pos, int(0.50 * OUT_H))
+    return plan
 
 
 def _sub_y(setting, auto_value: int) -> int:

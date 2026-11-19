@@ -25,6 +25,8 @@ class ChatMessage:
     ts: float          # Unix-Zeit (live) oder Sekunden ab Videostart (VOD)
     author: str
     text: str
+    color: str | None = None   # Namensfarbe des Chatters (#RRGGBB), fürs Chat-Overlay
+    kind: str = "msg"          # msg | raid | gifts (Raids/Sub-Geschenkwellen lösen leere Chat-Ausbrüche aus)
 
 
 class Platform:

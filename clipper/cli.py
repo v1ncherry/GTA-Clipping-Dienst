@@ -52,7 +52,7 @@ def cmd_run(cfg: dict, _args) -> None:
 
     db, orchestrator, app, lan_url = start_services(cfg)
     host, port = cfg["web"]["host"], int(cfg["web"]["port"])
-    print(f"\n  GTA Clipper {__version__} läuft")
+    print(f"\n  ClipStream {__version__} läuft")
     print(f"  Dashboard:        http://localhost:{port}")
     if lan_url and host in ("0.0.0.0", "::"):
         print(f"  Im Netzwerk (Mac): {lan_url}")
@@ -81,7 +81,7 @@ def cmd_shortcut(_cfg: dict, _args) -> None:
 def cmd_add(cfg: dict, args) -> None:
     from .platforms import detect_platform
 
-    platform, channel, url = detect_platform(args.url)
+    platform, channel, url = detect_platform(args.url, args.platform)
     db = _db(cfg)
     name = args.name or channel
     settings = {"transcription": {"language": args.language}} if args.language else {}
@@ -205,7 +205,7 @@ def cmd_setup(args) -> None:
     from .platforms import detect_platform
 
     cfg_path = Path(args.config or "config.yaml")
-    print("\n=== GTA Clipper – Einrichtung ===\n")
+    print("\n=== ClipStream – Einrichtung ===\n")
     if not cfg_path.exists():
         example = Path(__file__).resolve().parent.parent / "config.example.yaml"
         shutil.copyfile(example, cfg_path)
@@ -227,13 +227,17 @@ def cmd_setup(args) -> None:
     existing = db.list_streamers()
     if existing:
         print("\nBereits eingetragen: " + ", ".join(s["name"] for s in existing))
-    print("\nStreamer-URLs eingeben (Twitch, YouTube oder Kick), eine pro Zeile. Leere Zeile = fertig.")
+    print("\nStreamer eingeben – Handle (z.B. papaplatte) oder Link, einer pro Zeile. Leere Zeile = fertig.")
+    choices = {"t": "twitch", "y": "youtube", "k": "kick", "": "twitch"}
     while True:
-        url = input("URL: ").strip()
+        url = input("Handle oder Link: ").strip()
         if not url:
             break
+        pf = None
+        if "/" not in url and ":" not in url and "." not in url:
+            pf = choices.get(input("  Plattform – [t]witch, [y]outube, [k]ick [t]: ").strip().lower()[:1], "twitch")
         try:
-            platform, channel, norm = detect_platform(url)
+            platform, channel, norm = detect_platform(url, pf)
         except ValueError as exc:
             print(f"  ✗ {exc}")
             continue
@@ -275,12 +279,14 @@ def main(argv: list[str] | None = None) -> None:
             stream.reconfigure(errors="replace")  # Windows-Konsolen ohne UTF-8 nicht abstürzen lassen
         except (AttributeError, ValueError):
             pass
-    p = argparse.ArgumentParser(prog="python -m clipper", description="GTA Clipping-Dienst")
+    p = argparse.ArgumentParser(prog="python -m clipper", description="ClipStream – Clipping-Dienst für Live-Streams")
     p.add_argument("--config", "-c", help="Pfad zur config.yaml")
     sub = p.add_subparsers(dest="cmd")
     sub.add_parser("run", help="Dashboard + Überwachung starten (Standard)")
     a = sub.add_parser("add", help="Streamer hinzufügen")
-    a.add_argument("url")
+    a.add_argument("url", help="Handle (z.B. papaplatte) oder Link")
+    a.add_argument("--platform", "-p", choices=["twitch", "youtube", "kick"],
+                   help="Plattform, wenn nur ein Handle angegeben ist (Standard: twitch, @name = youtube)")
     a.add_argument("--name")
     a.add_argument("--language", help="z.B. de, en (Standard aus config)")
     sub.add_parser("list", help="Streamer und Accounts anzeigen")

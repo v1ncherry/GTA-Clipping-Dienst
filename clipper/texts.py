@@ -14,43 +14,58 @@ from .util import slugify
 log = logging.getLogger("clipper.texts")
 
 TITLES = {
-    "funny": ["{n} kann nicht mehr 😂", "Der Chat ist komplett eskaliert 😂", "{n} in GTA 6 ist einfach zu lustig 💀",
+    "funny": ["{n} kann nicht mehr 😂", "Der Chat ist komplett eskaliert 😂", "{n} ist einfach zu lustig 💀",
               "Warum passiert sowas nur {n}? 😂"],
-    "hype": ["{n} mit dem krassesten Move in GTA 6 🔥", "Der Chat dreht komplett durch 🔥",
-             "Niemand hat damit gerechnet 🤯"],
+    "hype": ["{n} mit dem krassesten Move 🔥", "Der Chat dreht komplett durch 🔥", "Niemand hat damit gerechnet 🤯"],
     "shock": ["Was ist da gerade passiert?! 😳", "{n} ist sprachlos 💀", "Damit hat {n} nicht gerechnet 😱"],
-    "fail": ["{n} hat es komplett verkackt 💀", "GTA 6 Fail des Tages 😭", "Das ging richtig schief 😭"],
-    "action": ["Die verrückteste Szene in GTA 6 🔥", "{n} eskaliert in GTA 6 💥", "GTA 6 ist einfach verrückt 🤯"],
+    "fail": ["{n} hat es komplett verkackt 💀", "Fail des Tages 😭", "Das ging richtig schief 😭"],
+    "action": ["Die verrückteste Szene des Streams 🔥", "{n} eskaliert komplett 💥", "Das ist einfach verrückt 🤯"],
+    "easteregg": ["{n} findet ein geheimes Easter Egg 🥚", "Das Easter Egg kannte fast keiner 👀",
+                  "Wusstest du DAS? 🤫"],
+    "glitch": ["Der verrückteste Glitch überhaupt 🤖", "Das Spiel ist komplett kaputt gegangen 💀",
+               "{n} findet einen absurden Bug 😂"],
+    "spannung": ["Der ganze Chat hat die Luft angehalten 😳", "Absolute Gänsehaut-Szene 🥶", "Niemand hat geatmet… 😶"],
 }
 HOOKS = {
     "funny": ["ER KANN NICHT MEHR", "CHAT ESKALIERT", "WIE KANN DAS SEIN"],
     "hype": ["WAS FÜR EIN MOVE", "CHAT DREHT DURCH", "DAS WAR KRANK"],
     "shock": ["WAS IST DA PASSIERT?!", "WARTE AUF DAS ENDE", "DAMIT RECHNET KEINER"],
     "fail": ["DAS GING SCHIEF", "WARTE AUF DAS ENDE", "KOMPLETT VERKACKT"],
-    "action": ["GTA 6 IST VERRÜCKT", "WARTE AUF DAS ENDE", "DAS MUSST DU SEHEN"],
+    "action": ["DAS MUSST DU SEHEN", "WARTE AUF DAS ENDE", "KOMPLETT VERRÜCKT"],
+    "easteregg": ["GEHEIMES EASTER EGG", "KANNTEST DU DAS?", "VERSTECKT IM SPIEL"],
+    "glitch": ["DAS SPIEL IST KAPUTT", "WAS IST DAS FÜR EIN BUG", "WARTE AUF DAS ENDE"],
+    "spannung": ["ALLE WAREN STILL", "GÄNSEHAUT", "WARTE AUF DAS ENDE"],
 }
 CATEGORY_TAGS = {
     "funny": ["#funny", "#lustig"], "hype": ["#viral"], "shock": ["#wtf"], "fail": ["#fail"], "action": ["#action"],
+    "easteregg": ["#eastereggs", "#secret"], "glitch": ["#glitch", "#bug"], "spannung": ["#spannung"],
 }
 
 # Englischsprachige Streamer (Sprache „en“): englische Titel, Hooks und Hashtags passend zu den Untertiteln
 TITLES_EN = {
-    "funny": ["{n} can't take it anymore 😂", "Chat lost it completely 😂", "{n} in GTA 6 is way too funny 💀",
+    "funny": ["{n} can't take it anymore 😂", "Chat lost it completely 😂", "{n} is way too funny 💀",
               "Why does this only happen to {n}? 😂"],
-    "hype": ["{n} with the craziest move in GTA 6 🔥", "Chat is going absolutely crazy 🔥", "Nobody saw that coming 🤯"],
+    "hype": ["{n} with the craziest move 🔥", "Chat is going absolutely crazy 🔥", "Nobody saw that coming 🤯"],
     "shock": ["What just happened?! 😳", "{n} is speechless 💀", "{n} did NOT expect that 😱"],
-    "fail": ["{n} completely messed up 💀", "GTA 6 fail of the day 😭", "That went horribly wrong 😭"],
-    "action": ["The craziest scene in GTA 6 🔥", "{n} goes crazy in GTA 6 💥", "GTA 6 is just insane 🤯"],
+    "fail": ["{n} completely messed up 💀", "Fail of the day 😭", "That went horribly wrong 😭"],
+    "action": ["The craziest scene of the stream 🔥", "{n} goes completely crazy 💥", "This is just insane 🤯"],
+    "easteregg": ["{n} finds a secret easter egg 🥚", "Almost nobody knew this easter egg 👀", "Did you know THIS? 🤫"],
+    "glitch": ["The craziest glitch ever 🤖", "The game completely broke 💀", "{n} finds an absurd bug 😂"],
+    "spannung": ["The whole chat held its breath 😳", "Absolute goosebumps scene 🥶", "Nobody was breathing… 😶"],
 }
 HOOKS_EN = {
     "funny": ["HE CAN'T TAKE IT", "CHAT LOST IT", "HOW IS THAT POSSIBLE"],
     "hype": ["WHAT A MOVE", "CHAT GOES CRAZY", "THAT WAS INSANE"],
     "shock": ["WHAT JUST HAPPENED?!", "WAIT FOR THE END", "NOBODY SAW THIS COMING"],
     "fail": ["THAT WENT WRONG", "WAIT FOR THE END", "TOTAL DISASTER"],
-    "action": ["GTA 6 IS INSANE", "WAIT FOR THE END", "YOU HAVE TO SEE THIS"],
+    "action": ["YOU HAVE TO SEE THIS", "WAIT FOR THE END", "ABSOLUTELY INSANE"],
+    "easteregg": ["SECRET EASTER EGG", "DID YOU KNOW THIS?", "HIDDEN IN THE GAME"],
+    "glitch": ["THE GAME IS BROKEN", "WHAT IS THIS BUG", "WAIT FOR THE END"],
+    "spannung": ["CHAT WENT SILENT", "GOOSEBUMPS", "WAIT FOR THE END"],
 }
 CATEGORY_TAGS_EN = {
     "funny": ["#funny"], "hype": ["#viral"], "shock": ["#wtf"], "fail": ["#fail"], "action": ["#action"],
+    "easteregg": ["#eastereggs", "#secret"], "glitch": ["#glitch", "#bug"], "spannung": ["#suspense"],
 }
 
 
@@ -93,13 +108,13 @@ def template_texts(streamer: dict, category: str, seed: int, lang: str = "de") -
     return {"title": rng.choice(titles[cat]).format(n=name), "hook": rng.choice(hooks[cat])}
 
 
-SYSTEM_PROMPT = """Du bist Social-Media-Editor für virale GTA-6-Shorts (TikTok, YouTube Shorts, Instagram Reels).
+SYSTEM_PROMPT = """Du bist Social-Media-Editor für virale Gaming-Shorts (TikTok, YouTube Shorts, Instagram Reels).
 Du bekommst das Transkript eines Stream-Ausschnitts und die häufigsten Chat-Nachrichten in dem Moment.
 Antworte NUR mit JSON in genau diesem Format:
 {"score": <1-10, wie clipwürdig/viral ist der Moment>,
  "title": "<Titel, max 70 Zeichen, <SPRACHE>, neugierig machend, nicht irreführend, 1-2 Emojis>",
  "hook": "<Einblendung für die ersten Sekunden, max 5 Wörter, <SPRACHE>, ohne Emojis>",
- "hashtags": ["<3-5 passende Hashtags ohne #gta6>"],
+ "hashtags": ["<3-5 passende Hashtags>"],
  "reason": "<ein Satz, warum der Moment funktioniert oder nicht>"}"""
 
 

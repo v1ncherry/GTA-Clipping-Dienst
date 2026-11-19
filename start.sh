@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# GTA Clipper starten (Mac/Linux). Beim ersten Mal wird alles installiert.
+# ClipStream starten (Mac/Linux). Beim ersten Mal wird alles installiert.
 set -e
 cd "$(dirname "$0")"
 if [ ! -d .venv ]; then

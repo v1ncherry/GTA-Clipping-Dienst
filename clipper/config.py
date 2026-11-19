@@ -22,9 +22,9 @@ DEFAULTS: dict[str, Any] = {
     },
     "monitor": {
         "poll_seconds": 60,
-        # Nur clippen, wenn Kategorie oder Stream-Titel eines dieser Wörter enthält.
+        # Nur clippen, wenn Kategorie oder Stream-Titel eines dieser Wörter enthält (z.B. ["gta"]).
         # Leere Liste = alles clippen.
-        "only_keywords": ["gta", "grand theft auto"],
+        "only_keywords": [],
         "quality": "1080p60,1080p,936p60,900p60,720p60,720p,best",
         # streamlink (empfohlen) oder yt-dlp
         "capture_tool": "streamlink",
@@ -161,8 +161,12 @@ DEFAULTS: dict[str, Any] = {
         # auto | h264_amf | h264_videotoolbox | h264_nvenc | h264_qsv | libx264
         "encoder": "auto",
         "video_bitrate": "12M",
-        # auto (Facecam oben, sonst Smart-Crop) | stack | crop | blur
+        # auto (Facecam oben, sonst Smart-Crop) | stack | stack_chat | crop | crop_chat | blur
         "layout": "auto",
+        # Größe der Facecam oben: s (25 %), m (33 %), l (42 % der Höhe)
+        "cam_size": "m",
+        # Chat ins Video einblenden (bei "auto": neben der Facecam bzw. über dem Gameplay)
+        "chat_overlay": False,
         "loudnorm": True,
         "hook_text": True,
         "hook_seconds": 3.5,
@@ -191,7 +195,7 @@ DEFAULTS: dict[str, Any] = {
         "min_score": 0,
         "timeout": 120,
     },
-    "hashtags": ["#gta6", "#gtavi", "#gta", "#gaming"],
+    "hashtags": ["#gaming", "#clips"],
     "uploads": {
         "youtube": {
             "client_secrets": "client_secret.json",
@@ -244,6 +248,16 @@ def load_config(path: str | os.PathLike | None = None) -> dict:
     for sub in ("buffer", "clips", "models", "logs", "vods", "secrets"):
         (data_dir / sub).mkdir(parents=True, exist_ok=True)
     return cfg
+
+
+def effective_config(cfg: dict, db=None, streamer: dict | None = None) -> dict:
+    """config.yaml + Einstellungen aus dem Dashboard (DB) + Overrides des Streamers."""
+    out = cfg
+    if db is not None:
+        overrides = db.get_setting("global")
+        if overrides:
+            out = deep_merge(out, overrides)
+    return streamer_config(out, streamer)
 
 
 def streamer_config(cfg: dict, streamer: dict | None) -> dict:

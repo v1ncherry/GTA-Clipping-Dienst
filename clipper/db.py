@@ -59,6 +59,10 @@ CREATE TABLE IF NOT EXISTS accounts (
     credentials TEXT NOT NULL,
     created_at REAL NOT NULL
 );
+CREATE TABLE IF NOT EXISTS settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS uploads (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     clip_id INTEGER NOT NULL,
@@ -72,9 +76,14 @@ CREATE TABLE IF NOT EXISTS uploads (
 """
 
 JSON_COLUMNS = {"settings", "facecam", "upload_targets", "breakdown", "chat_sample", "words", "hashtags", "layout",
-                "credentials"}
+                "credentials", "render_opts"}
 
-CLIP_STATUSES = ("queued", "processing", "ready", "failed", "uploaded", "discarded")
+# Spalten, die nach der ersten Version dazugekommen sind (werden bei bestehenden Datenbanken nachgerüstet)
+MIGRATIONS = {
+    "clips": {"filter_reason": "TEXT", "forced": "INTEGER NOT NULL DEFAULT 0", "render_opts": "TEXT"},
+}
+
+CLIP_STATUSES = ("queued", "processing", "ready", "failed", "uploaded", "filtered", "discarded")
 
 
 class DB:
@@ -85,6 +94,11 @@ class DB:
         with self.lock:
             self.conn.execute("PRAGMA journal_mode=WAL")
             self.conn.executescript(SCHEMA)
+            for table, cols in MIGRATIONS.items():
+                have = {r[1] for r in self.conn.execute(f"PRAGMA table_info({table})")}
+                for col, decl in cols.items():
+                    if col not in have:
+                        self.conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")
 
     # ------------------------------------------------------------------ low level
     @staticmethod
@@ -173,7 +187,7 @@ class DB:
         if status == "open":
             where.append("status IN ('queued','processing','ready','failed')")
         elif status == "working":
-            where.append("status IN ('queued','processing')")
+            where.append("status IN ('queued','processing','failed')")
         elif status and status != "all":
             where.append("status = ?")
             args.append(status)
@@ -195,6 +209,22 @@ class DB:
         row = self.one("SELECT COUNT(*) AS n FROM clips WHERE streamer_id = ? AND created_at >= ? "
                        "AND status != 'discarded'", (streamer_id, since))
         return int(row["n"]) if row else 0
+
+    # ------------------------------------------------------------------ settings
+    def get_setting(self, key: str, default=None):
+        row = self.one("SELECT value FROM settings WHERE key = ?", (key,))
+        if not row:
+            return default
+        try:
+            return json.loads(row["value"])
+        except ValueError:
+            return default
+
+    def set_setting(self, key: str, value) -> None:
+        with self.lock:
+            self.conn.execute("INSERT INTO settings (key, value) VALUES (?, ?) "
+                              "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                              (key, json.dumps(value, ensure_ascii=False)))
 
     # ------------------------------------------------------------------ accounts
     def add_account(self, platform: str, name: str, credentials: dict) -> int:

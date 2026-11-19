@@ -37,7 +37,11 @@ def parse_pusher_message(raw: str) -> ChatMessage | None:
         evt = json.loads(raw)
     except ValueError:
         return None
-    if evt.get("event") != "App\\Events\\ChatMessageEvent":
+    event = evt.get("event")
+    noise = {"App\\Events\\StreamHostEvent": "raid", "App\\Events\\GiftedSubscriptionsEvent": "gifts"}
+    if event in noise:
+        return ChatMessage(ts=time.time(), author="kick", text=event.rsplit("\\", 1)[-1], kind=noise[event])
+    if event != "App\\Events\\ChatMessageEvent":
         return None
     data = evt.get("data")
     if isinstance(data, str):
@@ -48,7 +52,9 @@ def parse_pusher_message(raw: str) -> ChatMessage | None:
     if not isinstance(data, dict):
         return None
     text = EMOTE_RE.sub(r"\1", data.get("content") or "").strip()
-    author = (data.get("sender") or {}).get("username") or "?"
+    sender = data.get("sender") or {}
+    author = sender.get("username") or "?"
+    color = (sender.get("identity") or {}).get("color")
     ts = time.time()
     created = data.get("created_at")
     if created:
@@ -56,7 +62,7 @@ def parse_pusher_message(raw: str) -> ChatMessage | None:
             ts = datetime.fromisoformat(created.replace("Z", "+00:00")).timestamp()
         except ValueError:
             pass
-    return ChatMessage(ts=ts, author=author, text=text) if text else None
+    return ChatMessage(ts=ts, author=author, text=text, color=color) if text else None
 
 
 class Kick(Platform):

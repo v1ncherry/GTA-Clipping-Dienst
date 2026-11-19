@@ -119,7 +119,7 @@ class Timeline:
         self.cap = new_cap
 
     # ------------------------------------------------------------------ input
-    def add_chat(self, t: float, author: str, text: str) -> None:
+    def add_chat(self, t: float, author: str, text: str, color: str | None = None) -> None:
         if t < 0:
             return
         if author.lower() in self.bots:
@@ -155,7 +155,7 @@ class Timeline:
                 self.chat["hypemsgs"][idx] += 1
             elif is_answer(text, hits):
                 self.chat["answers"][idx] += 1
-            self.messages.append((t, author, text))
+            self.messages.append((t, author, text, color))
             self.chat_until = max(self.chat_until, t)
 
     def add_noise(self, t: float, kind: str) -> None:

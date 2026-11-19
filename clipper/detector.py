@@ -81,6 +81,14 @@ class Detector:
         self.history: deque = deque(maxlen=1800)
         self.last_parts: dict = {}
 
+    def update_config(self, cfg: dict) -> None:
+        """Neue Einstellungen übernehmen, ohne den gelernten Normalpegel zu verlieren."""
+        self.d = cfg["detection"]
+        self.c = cfg["clips"]
+        self.f = cfg.get("filters") or {}
+        self.sp = cfg.get("special") or {}
+        self.weights, self.solo_factor = effective_weights(self.d)
+
     # ------------------------------------------------------------------ helpers
     def _ensure(self, idx: int) -> None:
         if idx < self.cap:

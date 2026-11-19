@@ -14,7 +14,7 @@ from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Resp
 from fastapi.staticfiles import StaticFiles
 
 from .. import __version__
-from ..config import data_path
+from ..config import data_path, deep_merge, effective_config
 from ..db import DB
 from ..platforms import detect_platform
 from ..processing import discard_clip
@@ -47,7 +47,7 @@ def desktop_token(cfg: dict) -> str:
 
 def create_app(cfg: dict, db: DB, orchestrator, processor, uploader, started: float | None = None,
                lan_url: str | None = None) -> FastAPI:
-    app = FastAPI(title="GTA Clipper", docs_url=None, redoc_url=None)
+    app = FastAPI(title="ClipStream", docs_url=None, redoc_url=None)
     password = str(cfg["web"].get("password") or "")
     app_token = desktop_token(cfg)
     started = started or time.time()
@@ -71,7 +71,7 @@ def create_app(cfg: dict, db: DB, orchestrator, processor, uploader, started: fl
                     ok = False
             if not ok:
                 return Response("Login erforderlich", status_code=401,
-                                headers={"WWW-Authenticate": 'Basic realm="GTA Clipper"'})
+                                headers={"WWW-Authenticate": 'Basic realm="ClipStream"'})
         return await call_next(request)
 
     app.mount("/static", StaticFiles(directory=STATIC), name="static")
@@ -89,7 +89,7 @@ def create_app(cfg: dict, db: DB, orchestrator, processor, uploader, started: fl
     def status():
         entries = orchestrator.status()
         by_id = {s["id"]: s for s in db.list_streamers()}
-        default_trigger = cfg["detection"]["trigger_score"]
+        default_trigger = effective_config(cfg, db)["detection"]["trigger_score"]
         for e in entries:  # Auslöse-Schwelle pro Streamer für die Linie in der Hype-Kurve
             det = ((by_id.get(e["id"]) or {}).get("settings") or {}).get("detection") or {}
             e["trigger"] = det.get("trigger_score") or default_trigger
@@ -115,7 +115,8 @@ def create_app(cfg: dict, db: DB, orchestrator, processor, uploader, started: fl
     @app.post("/api/streamers")
     def add_streamer(payload: dict = Body(...)):
         try:
-            platform, channel, url = detect_platform(payload.get("url", ""))
+            pf = payload.get("platform") if payload.get("platform") in ("twitch", "youtube", "kick") else None
+            platform, channel, url = detect_platform(payload.get("url") or payload.get("handle") or "", pf)
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
         name = (payload.get("name") or channel).strip()
@@ -230,11 +231,37 @@ def create_app(cfg: dict, db: DB, orchestrator, processor, uploader, started: fl
 
     @app.post("/api/clips/{cid}/rerender")
     def rerender(cid: int, payload: dict = Body(default={})):
-        _clip(cid)
-        layout = payload.get("layout")
-        db.update_clip(cid, layout_override=layout if layout in ("stack", "crop", "blur") else None)
+        """Neu rendern mit anderem Layout – bei aussortierten Clips: trotzdem rendern."""
+        c = _clip(cid)
+        opts = dict(c.get("render_opts") or {})
+        if payload.get("layout") in LAYOUTS:
+            opts["layout"] = payload["layout"]
+        if payload.get("cam_size") in ("s", "m", "l"):
+            opts["cam_size"] = payload["cam_size"]
+        if isinstance(payload.get("chat"), bool):
+            opts["chat"] = payload["chat"]
+        fields = {"render_opts": opts, "layout_override": None}
+        if c["status"] == "filtered":
+            fields["forced"] = 1
+        db.update_clip(cid, **fields)
         processor.enqueue(cid, rerender=True)
         return {"ok": True}
+
+    # ------------------------------------------------------------------ Einstellungen
+    @app.get("/api/settings")
+    def get_settings():
+        eff = effective_config(cfg, db)
+        return {key: _pick(eff, key) for key in GLOBAL_SETTINGS}
+
+    @app.put("/api/settings")
+    def put_settings(payload: dict = Body(...)):
+        current = db.get_setting("global") or {}
+        try:
+            update = validate_global_settings(payload)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        db.set_setting("global", deep_merge(current, update))
+        return get_settings()
 
     @app.post("/api/clips/{cid}/upload")
     def upload(cid: int, payload: dict = Body(...)):
@@ -316,13 +343,79 @@ def create_app(cfg: dict, db: DB, orchestrator, processor, uploader, started: fl
     return app
 
 
+LAYOUTS = ("auto", "stack", "stack_chat", "crop", "crop_chat", "blur")
+
 ALLOWED_SETTINGS = {
-    "detection": {"trigger_score", "release_score", "max_clips_per_hour", "cooldown_seconds"},
+    "detection": {"trigger_score", "release_score", "max_clips_per_hour", "cooldown_seconds", "stream_share"},
     "clips": {"min_seconds", "max_seconds", "pre_roll", "post_roll"},
-    "render": {"layout"},
+    "render": {"layout", "cam_size", "chat_overlay"},
     "transcription": {"language"},
     "monitor": {"only_keywords"},
 }
+
+# Was im Dashboard unter "Einstellungen" geändert werden darf: Pfad -> (Typ, Minimum, Maximum / erlaubte Werte)
+GLOBAL_SETTINGS = {
+    "detection.stream_share": ("num", 0, 100),
+    "detection.trigger_score": ("num", 40, 99),
+    "detection.max_clips_per_hour": ("num", 1, 60),
+    "detection.weights": ("weights", 0, 1),
+    "filters.enabled": ("bool",),
+    "filters.min_hype_ratio": ("num", 0, 1),
+    "filters.max_answer_ratio": ("num", 0.1, 1),
+    "filters.min_stream_reaction": ("num", 0, 5),
+    "filters.question_check": ("bool",),
+    "special.enabled": ("bool",),
+    "special.categories": ("choices", ("easteregg", "glitch")),
+    "special.silence": ("bool",),
+    "monitor.only_keywords": ("words",),
+    "render.layout": ("choice", LAYOUTS),
+    "render.cam_size": ("choice", ("s", "m", "l")),
+    "render.chat_overlay": ("bool",),
+    "render.hook_text": ("bool",),
+    "clips.max_seconds": ("num", 15, 180),
+    "hashtags": ("words",),
+}
+
+
+def _pick(cfg: dict, path: str):
+    node = cfg
+    for part in path.split("."):
+        node = node.get(part) if isinstance(node, dict) else None
+    return node
+
+
+def validate_global_settings(payload: dict) -> dict:
+    """Flache Pfade ({"detection.stream_share": 40}) prüfen und in verschachtelte Overrides umwandeln."""
+    out: dict = {}
+    for path, value in payload.items():
+        spec = GLOBAL_SETTINGS.get(path)
+        if spec is None:
+            raise ValueError(f"Unbekannte Einstellung: {path}")
+        kind = spec[0]
+        if kind == "num":
+            value = float(value)
+            value = min(max(value, spec[1]), spec[2])
+            value = int(value) if float(value).is_integer() else round(value, 3)
+        elif kind == "bool":
+            value = bool(value)
+        elif kind == "choice":
+            if value not in spec[1]:
+                raise ValueError(f"{path}: ungültiger Wert {value!r}")
+        elif kind == "choices":
+            value = [v for v in value if v in spec[1]]
+        elif kind == "weights":
+            value = {k: min(max(float(v), 0.0), 1.0) for k, v in dict(value).items()
+                     if k in ("chat_rate", "chatters", "emotes", "audio", "motion")}
+        elif kind == "words":
+            if isinstance(value, str):
+                value = [w.strip() for w in value.replace(",", " ").split() if w.strip()]
+            value = [str(w).strip() for w in value if str(w).strip()][:30]
+        node = out
+        parts = path.split(".")
+        for part in parts[:-1]:
+            node = node.setdefault(part, {})
+        node[parts[-1]] = value
+    return out
 
 
 def _merge_settings(current: dict, update: dict) -> dict:

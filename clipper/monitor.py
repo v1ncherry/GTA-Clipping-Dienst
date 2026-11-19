@@ -8,7 +8,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from .config import streamer_config
+from .config import effective_config
 from .db import DB
 from .platforms import Platform, make_platform
 from .session import LiveSession, cleanup_buffer, matches_keywords
@@ -54,8 +54,28 @@ class Orchestrator:
             self.platforms[streamer["id"]] = cached
         return cached[1]
 
+    def cleanup_filtered(self) -> int:
+        """Aussortierte Clips nach `filters.keep_hours` löschen (Rohvideos brauchen sonst viel Platz)."""
+        from .processing import discard_clip
+
+        hours = float(effective_config(self.cfg, self.db)["filters"].get("keep_hours", 48))
+        old = self.db.query("SELECT id FROM clips WHERE status = 'filtered' AND created_at < ?",
+                            (time.time() - hours * 3600,))
+        for row in old:
+            discard_clip(self.db, row["id"])
+        if old:
+            log.info("%d alte aussortierte Clips gelöscht", len(old))
+        return len(old)
+
     def _loop(self) -> None:
+        last_cleanup = 0.0
         while not self.stop_evt.wait(3):
+            if time.time() - last_cleanup > 600:
+                last_cleanup = time.time()
+                try:
+                    self.cleanup_filtered()
+                except Exception:  # noqa: BLE001
+                    log.exception("Aufräumen aussortierter Clips fehlgeschlagen")
             try:
                 streamers = {s["id"]: s for s in self.db.list_streamers()}
                 with self.lock:
@@ -70,7 +90,7 @@ class Orchestrator:
                         continue
                     with self.lock:
                         busy = sid in self.sessions or sid in self.checking
-                    poll = streamer_config(self.cfg, st)["monitor"]["poll_seconds"]
+                    poll = effective_config(self.cfg, self.db, st)["monitor"]["poll_seconds"]
                     if not busy and time.time() - self.last_check.get(sid, 0) >= poll:
                         with self.lock:
                             self.checking.add(sid)
@@ -86,7 +106,7 @@ class Orchestrator:
         try:
             platform = self._platform(streamer)
             info = platform.check_live()
-            scfg = streamer_config(self.cfg, streamer)
+            scfg = effective_config(self.cfg, self.db, streamer)
             state = {"status": "offline", "title": info.title, "category": info.category, "checked": time.time()}
             if info.live:
                 if matches_keywords(info, scfg["monitor"].get("only_keywords") or []):

@@ -1,5 +1,5 @@
 @echo off
-REM GTA Clipper starten (Windows). Beim ersten Start wird alles eingerichtet.
+REM ClipStream starten (Windows). Beim ersten Start wird alles eingerichtet.
 chcp 65001 >nul
 set PYTHONUTF8=1
 cd /d "%~dp0"

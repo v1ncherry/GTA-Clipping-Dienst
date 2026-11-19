@@ -237,3 +237,67 @@ def test_guarded_children_die_when_clipper_is_killed():
     finally:
         helper.kill()
         assert os.getpid()  # nichts weiter aufzuräumen: das Kind stirbt mit dem Job
+
+
+# --------------------------------------------------------------------------- ClipStream-Erweiterungen
+
+def test_handles_without_link():
+    from clipper.platforms import detect_platform
+
+    assert detect_platform("papaplatte") == ("twitch", "papaplatte", "https://www.twitch.tv/papaplatte")
+    assert detect_platform("Trymacs", "kick") == ("kick", "trymacs", "https://kick.com/trymacs")
+    assert detect_platform("@MontanaBlack")[2] == "https://www.youtube.com/@MontanaBlack"
+    assert detect_platform("yt:@Rezo")[0] == "youtube"
+    assert detect_platform("kick:abc")[2] == "https://kick.com/abc"
+
+
+def test_twitch_raid_and_color():
+    raid = ("@msg-id=raid;login=bigstreamer;system-msg=1000\\sraiders;tmi-sent-ts=1700000000000 "
+            ":tmi.twitch.tv USERNOTICE #streamer")
+    msg = parse_irc_line(raid)
+    assert msg.kind == "raid" and "1000 raiders" in msg.text
+    line = ("@color=#1E90FF;display-name=Fan;tmi-sent-ts=1700000000000 :fan!fan@fan.tmi.twitch.tv "
+            "PRIVMSG #streamer :hi")
+    assert parse_irc_line(line).color == "#1E90FF"
+
+
+def test_chat_overlay_events():
+    from clipper.subtitles import chat_events
+
+    msgs = [{"t": -5, "author": "early", "text": "vorher"}, {"t": 1.0, "author": "a", "text": "KEKW 😂"},
+            {"t": 1.1, "author": "b", "text": "x" * 200, "color": "#FF0000"}, {"t": 2, "author": "c", "text": "😂😂"}]
+    ev = chat_events(msgs, {"x": 600, "y": 0, "w": 480, "h": 640, "panel": True}, 10.0)
+    assert ev and ev[0].startswith("Dialogue: 3,0:00:00.00")
+    assert "vorher" in ev[0] and "…" in ev[-1]
+    assert all("😂" not in e for e in ev)           # Emojis kann libass nicht – werden entfernt
+    assert "&H000000FF" in ev[-1]                   # Namensfarbe #FF0000 -> ASS-Farbe
+
+
+def test_settings_validation():
+    from clipper.web.app import validate_global_settings
+
+    out = validate_global_settings({"detection.stream_share": 140, "special.categories": ["glitch", "evil"],
+                                    "monitor.only_keywords": "gta, fortnite", "render.chat_overlay": 1})
+    assert out == {"detection": {"stream_share": 100}, "special": {"categories": ["glitch"]},
+                   "monitor": {"only_keywords": ["gta", "fortnite"]}, "render": {"chat_overlay": True}}
+    with pytest.raises(ValueError):
+        validate_global_settings({"web.password": "x"})
+
+
+def test_effective_config_layers(tmp_path):
+    from clipper.config import effective_config
+    from clipper.db import DB
+
+    db = DB(str(tmp_path / "t.db"))
+    db.set_setting("global", {"detection": {"stream_share": 60}})
+    cfg = effective_config(DEFAULTS, db, {"settings": {"detection": {"trigger_score": 80}}})
+    assert cfg["detection"]["stream_share"] == 60 and cfg["detection"]["trigger_score"] == 80
+    assert cfg["detection"]["release_score"] == DEFAULTS["detection"]["release_score"]
+
+
+def test_question_detection_in_transcript():
+    from clipper.processing import asked_chat_question
+
+    ws = [Word(10, 10.3, "Chat,"), Word(10.4, 10.7, "soll"), Word(10.8, 11, "ich"), Word(11.1, 11.5, "springen?")]
+    assert asked_chat_question(ws, 9, 12)
+    assert not asked_chat_question([Word(10, 11, "Alter"), Word(11, 12, "krass!")], 9, 12)

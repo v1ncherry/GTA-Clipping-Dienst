@@ -9,7 +9,8 @@ import shutil
 import threading
 from pathlib import Path
 
-from .config import streamer_config
+from .chatlog import load_clip_chat
+from .config import effective_config
 from .db import DB
 from .layout import plan_layout
 from .render import extract_wav, make_thumbnail, render_clip
@@ -19,6 +20,33 @@ from .transcribe import Word, smart_trim, transcribe_locked
 from .util import probe
 
 log = logging.getLogger("clipper.processing")
+
+# Formulierungen, mit denen Streamer den Chat direkt ansprechen/abstimmen lassen
+QUESTION_PHRASES = ("chat", "was meint ihr", "was denkt ihr", "soll ich", "sollen wir", "wer von euch", "schreibt",
+                    "ja oder nein", "votet", "abstimm", "welche", "welcher", "welches", "wie viele", "kennt ihr",
+                    "what do you think", "should i", "should we", "who of you", "type in", "yes or no", "which one")
+
+
+def asked_chat_question(words: list[Word], t0: float, t1: float) -> bool:
+    """Hat der Streamer zwischen t0 und t1 dem Chat eine Frage gestellt?"""
+    text = " ".join(w.text for w in words if t0 <= w.start <= t1).lower()
+    if not text:
+        return False
+    addressed = any(p in text for p in QUESTION_PHRASES)
+    return addressed and ("?" in text or " oder " in text or " or " in text)
+
+
+def render_options(cfg: dict, clip: dict) -> dict:
+    """Layout-Optionen: Standard (Einstellungen/Streamer) + Auswahl am Clip."""
+    r = cfg["render"]
+    opts = {"layout": r.get("layout", "auto"), "cam_size": r.get("cam_size", "m"),
+            "chat": bool(r.get("chat_overlay", False))}
+    if clip.get("layout_override") and not clip.get("render_opts"):
+        opts["layout"] = clip["layout_override"]
+    for key, value in (clip.get("render_opts") or {}).items():
+        if value is not None and key in opts:
+            opts[key] = value
+    return opts
 
 
 class Processor:
@@ -64,8 +92,10 @@ class Processor:
         clip = self.db.get_clip(clip_id)
         if not clip or clip["status"] in ("discarded", "uploaded") and not rerender:
             return
+        if clip["status"] == "filtered" and not clip.get("forced"):
+            return
         streamer = self.db.get_streamer(clip["streamer_id"]) or {"name": "?", "url": "", "platform": "local"}
-        cfg = streamer_config(self.cfg, streamer)
+        cfg = effective_config(self.cfg, self.db, streamer)
         self.db.update_clip(clip_id, status="processing", error=None)
         work = Path(clip["dir"])
         work.mkdir(parents=True, exist_ok=True)
@@ -97,6 +127,17 @@ class Processor:
             transcript = " ".join(w.text for w in ws if start - 0.2 <= w.start <= end)
             self.db.update_clip(clip_id, words=words, raw_start=start, raw_end=end, transcript=transcript)
             clip = self.db.get_clip(clip_id)
+            bd = clip.get("breakdown") or {}
+            q = bd.get("quality") or {}
+            if (cfg["filters"].get("enabled", True) and cfg["filters"].get("question_check", True)
+                    and clip["source"] in ("auto", "vod") and not clip.get("forced")
+                    and isinstance(bd.get("event_start_raw"), (int, float))
+                    and q.get("hype_ratio", 1.0) < 0.35 and q.get("stream_reaction", 9.0) < 2.0
+                    and asked_chat_question(ws, bd["event_start_raw"] - 15, bd["event_start_raw"] + 2)):
+                reason = "Streamer hat den Chat etwas gefragt"
+                log.info("Clip %s aussortiert: %s", clip_id, reason)
+                self.db.update_clip(clip_id, status="filtered", filter_reason=reason)
+                return
 
         # 2) Titel, Hook, Hashtags
         if not clip.get("title"):
@@ -112,11 +153,15 @@ class Processor:
         # 3) Layout (Facecam + Smart-Crop)
         dur = end - start
         self._step(clip_id, "Layout")
-        plan = plan_layout(cfg, src, start, dur, info, streamer.get("facecam"), clip.get("layout_override"))
+        opts = render_options(cfg, clip)
+        plan = plan_layout(cfg, src, start, dur, info, streamer.get("facecam"), opts)
 
-        # 4) Untertitel
+        # 4) Untertitel (+ Chat-Overlay)
         clip_words = [Word(s - start, e - start, t) for s, e, t in (clip.get("words") or []) if e > start and s < end]
-        ass = build_ass(clip_words, plan, cfg, dur, hook=clip.get("hook"), credit=credit_line(streamer))
+        chat = None
+        if plan.get("chat"):
+            chat = [{**m, "t": m["t"] - start} for m in load_clip_chat(work / "chat.json") if m["t"] <= end]
+        ass = build_ass(clip_words, plan, cfg, dur, hook=clip.get("hook"), credit=credit_line(streamer), chat=chat)
         ass_path = work / "subs.ass"
         ass_path.write_text(ass, encoding="utf-8")
 
@@ -131,7 +176,7 @@ class Processor:
         thumb = work / "thumb.jpg"
         make_thumbnail(cfg, str(out), thumb_t, str(thumb))
         self.db.update_clip(clip_id, status="ready", final_path=str(out), thumb_path=str(thumb), duration=round(dur, 2),
-                            layout={k: v for k, v in plan.items() if k != "x_keys"}, error=None)
+                            layout={**{k: v for k, v in plan.items() if k != "x_keys"}, "opts": opts}, error=None)
         log.info("Clip %s fertig: %s (%.0fs, %s)", clip_id, clip.get("title"), dur, plan["type"])
 
 

@@ -53,8 +53,50 @@ def chunk_words(words: list[Word], max_words: int = 3, max_chars: int = 18, max_
     return chunks
 
 
+# Standardfarben für Chatter ohne eigene Namensfarbe (wie bei Twitch)
+CHAT_COLORS = ["#FF4A4A", "#4A90FF", "#3DDC84", "#B97CFF", "#FF9F43", "#FFD93D", "#4AD7E8", "#FF7EB6",
+               "#9BE15D", "#F7A1FF"]
+
+
+def _author_color(author: str, color: str | None) -> str:
+    if color and len(color.lstrip("#")) == 6:
+        return color
+    return CHAT_COLORS[sum(map(ord, author)) % len(CHAT_COLORS)]
+
+
+def chat_events(messages: list[dict], region: dict, duration: float) -> list[str]:
+    """Chat-Box: zeigt die letzten Nachrichten (neueste unten), aktualisiert höchstens 4x pro Sekunde."""
+    fs = 34
+    line_h = fs * 1.32
+    max_lines = max(2, int((region["h"] - 24) // line_h))
+    max_chars = max(12, int((region["w"] - 28) / (fs * 0.55)))
+    msgs = []
+    for m in sorted(messages, key=lambda m: m["t"]):
+        text = " ".join(strip_emoji(str(m.get("text", ""))).split())
+        author = str(m.get("author") or "?")[:18]
+        budget = max_chars - len(author) - 2
+        if not text or budget < 4 or m["t"] >= duration:
+            continue
+        if len(text) > budget:
+            text = text[:budget - 1] + "…"
+        msgs.append((max(0.0, round(m["t"] * 4) / 4), author, text, _author_color(author, m.get("color"))))
+    if not msgs:
+        return []
+    ticks = sorted({t for t, *_ in msgs})
+    x, y = region["x"] + 16, region["y"] + region["h"] - 14
+    out = []
+    for i, t0 in enumerate(ticks):
+        t1 = ticks[i + 1] if i + 1 < len(ticks) else duration
+        visible = [m for m in msgs if m[0] <= t0][-max_lines:]
+        lines = [f"{{\\c{ass_color(c)}\\b1}}{ass_escape(a)}{{\\c&H00FFFFFF\\b0}}: {ass_escape(t)}"
+                 for _t, a, t, c in visible]
+        out.append(f"Dialogue: 3,{ass_time(t0)},{ass_time(t1)},Chat,,0,0,0,,"
+                   f"{{\\an1\\q2\\fs{fs}\\pos({x},{y})}}" + "\\N".join(lines))
+    return out
+
+
 def build_ass(words: list[Word], plan: dict, cfg: dict, duration: float, hook: str | None = None,
-              credit: str | None = None) -> str:
+              credit: str | None = None, chat: list[dict] | None = None) -> str:
     r = cfg["render"]
     sc = r["subtitles"]
     font = sc.get("font", "Arial Black")
@@ -79,6 +121,7 @@ def build_ass(words: list[Word], plan: dict, cfg: dict, duration: float, hook: s
         "70,70,0,1",
         f"Style: Hook,{font},62,&H00000000,&H000000FF,&H00FFFFFF,&H00FFFFFF,-1,0,0,0,100,100,0,0,3,16,0,5,90,90,0,1",
         "Style: Credit,Arial,34,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,3,0,1,30,30,0,1",
+        "Style: Chat,Arial,30,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,2,0,1,0,0,0,1",
         "",
         "[Events]",
         "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text",
@@ -111,6 +154,8 @@ def build_ass(words: list[Word], plan: dict, cfg: dict, duration: float, hook: s
             end = min(duration, float(r.get("hook_seconds", 3.5)))
             lines.append(f"Dialogue: 1,{ass_time(0)},{ass_time(end)},Hook,,0,0,0,,"
                          f"{{\\an5\\pos(540,{int(plan.get('hook_y', 300))})\\fad(80,250)}}{hook_txt}")
+    if chat and plan.get("chat"):
+        lines.extend(chat_events(chat, plan["chat"], duration))
     if credit and r.get("credit", True):
         cx, cy, align = plan.get("credit", [30, 130, 7])
         lines.append(f"Dialogue: 2,{ass_time(0)},{ass_time(duration)},Credit,,0,0,0,,"

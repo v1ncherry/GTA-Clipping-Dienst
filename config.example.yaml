@@ -1,4 +1,4 @@
-# GTA Clipper – Konfiguration
+# ClipStream – Konfiguration
 # Kopieren nach config.yaml und anpassen. Alles, was hier fehlt, nimmt den Standardwert
 # (siehe clipper/config.py). Viele Werte lassen sich pro Streamer im Dashboard überschreiben.
 
@@ -12,18 +12,29 @@ web:
 
 monitor:
   poll_seconds: 60      # wie oft geprüft wird, ob ein Streamer live gegangen ist
-  only_keywords: ["gta", "grand theft auto"]   # nur clippen, wenn Kategorie/Titel passt ([] = immer)
+  only_keywords: []      # nur clippen, wenn Kategorie/Titel passt, z.B. ["gta", "fortnite"] ([] = immer)
   quality: "1080p60,1080p,936p60,900p60,720p60,720p,best"
 
 buffer:
   keep_minutes: 15      # so viel Stream wird rückwirkend vorgehalten (ca. 1 GB pro Streamer bei 1080p60)
 
+# Die meisten dieser Werte lassen sich bequemer im Dashboard unter "Einstellungen" ändern.
 detection:
+  stream_share: 35      # Regler Chat <-> Stream: Anteil der Stream-Reaktion (Ton/Bild) in Prozent
   trigger_score: 72     # 0-100. Höher = weniger, aber krassere Clips
   release_score: 50
   max_clips_per_hour: 10
   cooldown_seconds: 45
   chat_delay: {twitch: 4, youtube: 7, kick: 5, vod: 8}   # wird live automatisch nachjustiert
+
+filters:                # leere Chat-Ausbrüche aussortieren (Antworten auf Fragen, Raids, Spam)
+  enabled: true
+  keep_hours: 48        # aussortierte Rohvideos danach löschen
+
+special:                # Spezial-Momente auch ohne großen Hype
+  enabled: true
+  categories: ["easteregg", "glitch"]
+  silence: true         # plötzliche Stille im Chat (Spannung)
 
 clips:
   min_seconds: 20
@@ -41,7 +52,9 @@ transcription:
 
 render:
   encoder: auto         # auto wählt h264_amf (AMD), h264_videotoolbox (Mac), h264_nvenc oder libx264
-  layout: auto          # auto | stack | crop | blur
+  layout: auto          # auto | stack | stack_chat | crop | crop_chat | blur
+  cam_size: m           # Facecam oben: s | m | l
+  chat_overlay: false   # Chat ins Video einblenden
   fps: auto
   hook_text: true       # Einblendung der ersten Sekunden ("ER KANN NICHT MEHR")
   credit: true          # "twitch.tv/name" im Video
@@ -57,7 +70,7 @@ llm:                    # optional: lokales LLM für bessere Titel + KI-Bewertun
   url: http://localhost:11434
   model: qwen2.5:7b-instruct
 
-hashtags: ["#gta6", "#gtavi", "#gta", "#gaming"]
+hashtags: ["#gaming", "#clips"]   # z.B. ["#gta6", "#gaming"]
 
 uploads:
   youtube:

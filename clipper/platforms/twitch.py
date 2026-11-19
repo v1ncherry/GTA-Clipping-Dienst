@@ -15,10 +15,7 @@ log = logging.getLogger("clipper.twitch")
 IRC_URL = "wss://irc-ws.chat.twitch.tv:443"
 
 
-def parse_irc_line(line: str) -> ChatMessage | None:
-    """Eine Twitch-IRC-Zeile (mit IRCv3-Tags) in eine ChatMessage umwandeln."""
-    if " PRIVMSG #" not in line:
-        return None
+def _parse_tags(line: str) -> tuple[dict[str, str], str]:
     tags: dict[str, str] = {}
     rest = line
     if rest.startswith("@"):
@@ -26,16 +23,34 @@ def parse_irc_line(line: str) -> ChatMessage | None:
         for part in raw_tags.split(";"):
             key, _, value = part.partition("=")
             tags[key] = value
+    return tags, rest
+
+
+def _sent_ts(tags: dict[str, str]) -> float:
+    try:
+        return int(tags.get("tmi-sent-ts", "0")) / 1000.0 or time.time()
+    except ValueError:
+        return time.time()
+
+
+def parse_irc_line(line: str) -> ChatMessage | None:
+    """Eine Twitch-IRC-Zeile (mit IRCv3-Tags) in eine ChatMessage umwandeln."""
+    if " USERNOTICE #" in line:
+        tags, _rest = _parse_tags(line)
+        kind = {"raid": "raid", "submysterygift": "gifts"}.get(tags.get("msg-id", ""))
+        if kind:
+            text = tags.get("system-msg", "").replace("\\s", " ")
+            return ChatMessage(ts=_sent_ts(tags), author=tags.get("login", "?"), text=text, kind=kind)
+        return None
+    if " PRIVMSG #" not in line:
+        return None
+    tags, rest = _parse_tags(line)
     prefix, _, rest = rest.partition(" PRIVMSG #")
     _channel, _, text = rest.partition(" :")
     author = tags.get("display-name") or prefix.lstrip(":").split("!")[0]
-    try:
-        ts = int(tags.get("tmi-sent-ts", "0")) / 1000.0 or time.time()
-    except ValueError:
-        ts = time.time()
     if text.startswith("\x01ACTION ") and text.endswith("\x01"):
         text = text[8:-1]
-    return ChatMessage(ts=ts, author=author, text=text.strip())
+    return ChatMessage(ts=_sent_ts(tags), author=author, text=text.strip(), color=tags.get("color") or None)
 
 
 class Twitch(Platform):

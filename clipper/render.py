@@ -18,24 +18,36 @@ def output_fps(cfg: dict, info: dict) -> int:
     return int(fps)
 
 
-def build_filtergraph(plan: dict, fps: int, ass_path: str | None, cfg: dict, has_audio: bool) -> str:
+def build_filtergraph(plan: dict, fps: int, ass_path: str | None, cfg: dict, has_audio: bool,
+                      dur: float = 60.0) -> str:
     subs = ""
     if ass_path:
         subs = f",ass={ff_filter_path(ass_path)}"
         fonts_dir = cfg["render"]["subtitles"].get("fonts_dir")
         if fonts_dir and Path(fonts_dir).exists():
             subs += f":fontsdir={ff_filter_path(fonts_dir)}"
-    tail = f"setsar=1,fps={fps},format=yuv420p{subs}[v]"
+    box = ""
+    chat = plan.get("chat")
+    if chat and not chat.get("panel"):
+        box = f",drawbox=x={chat['x']}:y={chat['y']}:w={chat['w']}:h={chat['h']}:color=black@0.45:t=fill"
+    tail = f"setsar=1,fps={fps},format=yuv420p{box}{subs}[v]"
     t = plan["type"]
     if t == "stack":
         cx, cy, cw, ch = plan["cam"]
         top_h = plan["top_h"]
+        cam_w = plan.get("cam_w", OUT_W)
         g = plan["game"]
         x = x_expression(plan["x_keys"])
+        # Facecam füllt ihre Fläche; beim Zuschneiden bleibt der obere Teil (Gesicht) im Bild
+        cam_chain = (f"[cin]crop={cw}:{ch}:{cx}:{cy},scale={cam_w}:{top_h}:force_original_aspect_ratio=increase:"
+                     f"flags=lanczos,crop={cam_w}:{top_h}:(iw-ow)/2:(ih-oh)*0.3,setsar=1")
+        if chat and chat.get("panel"):
+            top = (f"{cam_chain}[cam0];color=c=0x111216:s={OUT_W - cam_w}x{top_h}:r={fps}:d={dur + 1:.2f},"
+                   f"setsar=1[chatbg];[cam0][chatbg]hstack=inputs=2:shortest=1[cam];")
+        else:
+            top = f"{cam_chain}[cam];"
         video = (
-            "[0:v]split=2[cin][gin];"
-            f"[cin]crop={cw}:{ch}:{cx}:{cy},scale={OUT_W}:{top_h}:force_original_aspect_ratio=increase:flags=lanczos,"
-            f"crop={OUT_W}:{top_h},setsar=1[cam];"
+            "[0:v]split=2[cin][gin];" + top +
             f"[gin]crop={g['w']}:{g['h']}:x='{x}':y={g['y']},scale={OUT_W}:{OUT_H - top_h}:flags=lanczos,setsar=1[game];"
             f"[cam][game]vstack=inputs=2,{tail}"
         )
@@ -63,7 +75,7 @@ def render_clip(cfg: dict, src: str, start: float, dur: float, plan: dict, info:
                 out_path: str) -> None:
     fps = output_fps(cfg, info)
     has_audio = bool(info.get("has_audio"))
-    fg = build_filtergraph(plan, fps, ass_path, cfg, has_audio)
+    fg = build_filtergraph(plan, fps, ass_path, cfg, has_audio, dur)
     cmd = [ffmpeg_bin(cfg), "-hide_banner", "-loglevel", "error", "-nostdin", "-y",
            "-ss", f"{start:.3f}", "-i", src]
     if not has_audio:

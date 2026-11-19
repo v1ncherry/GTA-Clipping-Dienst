@@ -60,7 +60,8 @@ class Local(Platform):
 
     def check_live(self) -> LiveInfo:
         live = self.path.exists() and not self._played
-        return LiveInfo(live, title=f"GTA 6 Testlauf ({self.path.name})", category="Grand Theft Auto VI")
+        return LiveInfo(live, title=f"Testlauf ({self.path.name})", category="Testlauf",
+                        extra={"any_category": True})
 
     def capture_source_cmd(self, info: LiveInfo) -> list[str] | None:
         self._played = True

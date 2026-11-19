@@ -12,7 +12,8 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from .config import data_path, streamer_config
+from .chatlog import save_clip_chat
+from .config import data_path, effective_config
 from .db import DB
 from .detector import Detector
 from .platforms.base import ChatMessage
@@ -60,7 +61,7 @@ def download_chat(url: str, out: Path) -> list[ChatMessage]:
 
 def run_vod(cfg: dict, db: DB, processor, source: str, streamer: dict, chat_file: str | None = None,
             lag: float | None = None) -> list[int]:
-    scfg = streamer_config(cfg, streamer)
+    scfg = effective_config(cfg, db, streamer)
     if source.startswith(("http://", "https://")):
         log.info("Lade VOD herunter: %s", source)
         path = download_vod(cfg, source)
@@ -78,19 +79,20 @@ def run_vod(cfg: dict, db: DB, processor, source: str, streamer: dict, chat_file
     info = probe(cfg, path)
     log.info("Analysiere %s (%.0f min, %d Chat-Nachrichten) …", path.name, info["duration"] / 60, len(chat))
 
-    tl = Timeline(scfg["keywords"])
+    tl = Timeline(scfg["keywords"], scfg.get("chat_filter"))
     t0 = time.time()
     MediaAnalyzer(cfg, tl).analyze(path, 0.0, has_audio=info["has_audio"])
     log.info("Bild/Ton analysiert in %.0fs", time.time() - t0)
     for m in chat:
-        tl.add_chat(m.ts, m.author, m.text)
+        tl.add_chat(m.ts, m.author, m.text, m.color)
 
     events: list[dict] = []
-    det = Detector(tl, scfg, lag if lag is not None else scfg["detection"]["chat_delay"]["vod"],
-                   on_event=events.append)
+    lag = lag if lag is not None else scfg["detection"]["chat_delay"]["vod"]
+    det = Detector(tl, scfg, lag, on_event=events.append)
     det.advance(info["duration"])
     det.finalize()
-    log.info("%d Hype-Momente gefunden", len(events))
+    kept = [e for e in events if not e.get("filtered")]
+    log.info("%d Momente gefunden, %d aussortiert", len(kept), len(events) - len(kept))
 
     ids = []
     slug = slugify(streamer["name"])
@@ -98,16 +100,22 @@ def run_vod(cfg: dict, db: DB, processor, source: str, streamer: dict, chat_file
         stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
         work = data_path(cfg, "clips", slug, f"vod-{stamp}-{i:02d}-{int(ev['score'])}")
         work.mkdir(parents=True, exist_ok=True)
-        breakdown = {**ev["breakdown"], "peak_raw": ev["peak"], "vod_time": round(ev["peak"])}
+        breakdown = {**ev["breakdown"], "peak_raw": ev["peak"], "event_start_raw": ev["start"],
+                     "vod_time": round(ev["peak"])}
+        save_clip_chat(work / "chat.json", tl, ev["clip_start"], ev["clip_end"], lag, 0.0)
+        filtered = ev.get("filtered")
         cid = db.add_clip(
-            streamer_id=streamer["id"], status="queued", source="vod", stream_title=path.stem,
+            streamer_id=streamer["id"], status="filtered" if filtered else "queued",
+            source="special" if ev["source"] == "special" else "vod", stream_title=path.stem,
             category=ev["category"], score=ev["score"], breakdown=breakdown, chat_sample=ev["chat_sample"],
             dir=str(work), raw_path=str(path), raw_owned=0, raw_start=ev["clip_start"],
-            raw_end=min(ev["clip_end"], info["duration"]),
+            raw_end=min(ev["clip_end"], info["duration"]), filter_reason=filtered,
         )
-        ids.append(cid)
-        processor.enqueue(cid)
-        log.info("  #%d  %s  Score %.0f  %s", cid, _fmt(ev["peak"]), ev["score"], ev["category"])
+        log.info("  #%d  %s  Score %.0f  %s%s", cid, _fmt(ev["peak"]), ev["score"], ev["category"],
+                 f"  (aussortiert: {filtered})" if filtered else "")
+        if not filtered:
+            ids.append(cid)
+            processor.enqueue(cid)
     return ids
 
 
