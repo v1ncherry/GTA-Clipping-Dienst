@@ -20,7 +20,7 @@ buffer:
 
 # Die meisten dieser Werte lassen sich bequemer im Dashboard unter "Einstellungen" ändern.
 detection:
-  stream_share: 35      # Regler Chat <-> Stream: Anteil der Stream-Reaktion (Ton/Bild) in Prozent
+  stream_share: 40      # Regler Chat <-> Stream: Anteil der Stream-Reaktion (Ton/Bild) in Prozent
   trigger_score: 72     # 0-100. Höher = weniger, aber krassere Clips
   release_score: 50
   max_clips_per_hour: 10

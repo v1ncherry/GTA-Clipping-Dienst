@@ -13,7 +13,7 @@ from datetime import datetime
 from pathlib import Path
 
 from .chatlog import save_clip_chat
-from .config import data_path, effective_config
+from .config import data_path, effective_config, keyword_spec
 from .db import DB
 from .detector import Detector
 from .platforms import LiveInfo, Platform
@@ -142,7 +142,7 @@ class LiveSession:
         self.dir = data_path(cfg, "buffer", self.slug, self.started.strftime("%Y%m%d-%H%M%S"))
         self.dir.mkdir(parents=True, exist_ok=True)
         self.wall0 = time.time()
-        self.timeline = Timeline(self.cfg["keywords"], self.cfg.get("chat_filter"))
+        self.timeline = Timeline(keyword_spec(self.cfg), self.cfg.get("chat_filter"))
         self.analyzer = MediaAnalyzer(cfg, self.timeline)
         delays = self.cfg["detection"]["chat_delay"]
         self.detector = Detector(self.timeline, self.cfg, delays.get(platform.name, 5), on_event=self._on_event)
@@ -339,6 +339,8 @@ class LiveSession:
         streamer = self.db.get_streamer(self.streamer["id"]) or self.streamer
         cfg = effective_config(self.base_cfg, self.db, streamer)
         if cfg != self.cfg:
+            if keyword_spec(cfg) != keyword_spec(self.cfg):
+                self.timeline.update_keywords(keyword_spec(cfg))
             self.cfg = cfg
             self.detector.update_config(cfg)
             log.info("%s: neue Einstellungen übernommen", self.streamer["name"])
@@ -379,6 +381,17 @@ class LiveSession:
             log.info("%s: %s erkannt! Score %.0f (%s) bei %.0fs", self.streamer["name"],
                      "Spezial-Moment" if ev["source"] == "special" else "Hype-Moment", ev["score"],
                      ev["category"], ev["peak"])
+        self._queue(ev)
+
+    def _queue(self, ev: dict) -> None:
+        """Clip vormerken. Für die TikTok-Langversion wird mehr Vorlauf (und etwas Nachlauf) mitgesichert."""
+        start, end = ev["clip_start"], ev["clip_end"]
+        r = self.cfg["render"]
+        if r.get("tiktok_long", True) and end - start < 61:
+            post = 10.0
+            pre = max(0.0, float(r.get("long_seconds", 70)) - (end - start) - post) + 3.0
+            start, end = max(0.0, start - pre), end + post
+        ev["extract_start"], ev["extract_end"] = start, end
         with self.pending_lock:
             self.pending.append(ev)
 
@@ -386,13 +399,12 @@ class LiveSession:
         end = self.timeline.av_until
         if end <= 1:
             raise RuntimeError("Noch keine Aufnahme im Puffer")
-        ev = self.detector.manual_event(end, seconds)
-        with self.pending_lock:
-            self.pending.append(ev)
+        self._queue(self.detector.manual_event(end, seconds))
 
     def _process_pending(self, final: bool = False) -> None:
         with self.pending_lock:
-            ready = [e for e in self.pending if final or e["clip_end"] + 1 <= self.timeline.av_until]
+            ready = [e for e in self.pending
+                     if final or e.get("extract_end", e["clip_end"]) + 1 <= self.timeline.av_until]
             self.pending = [e for e in self.pending if e not in ready]
         for ev in ready:
             try:
@@ -402,8 +414,9 @@ class LiveSession:
 
     def _extract(self, ev: dict) -> None:
         start, end = ev["clip_start"], ev["clip_end"]
+        xs, xe = ev.get("extract_start", start), ev.get("extract_end", end)
         with self.seg_lock:
-            segs = [s for s in self.segments if s.end > start - 0.5 and s.start < end + 0.5 and s.path.exists()]
+            segs = [s for s in self.segments if s.end > xs - 0.5 and s.start < xe + 0.5 and s.path.exists()]
         if not segs:
             log.warning("%s: keine Segmente für %.0f-%.0fs im Puffer", self.streamer["name"], start, end)
             return

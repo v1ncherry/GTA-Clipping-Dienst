@@ -107,6 +107,14 @@ class Timeline:
         self.av_until = 0.0
         self.lock = threading.RLock()
 
+    def update_keywords(self, keywords: dict) -> None:
+        """Neue Stichwörter/Kategorien übernehmen (z.B. aus den Einstellungen), ohne Verlauf zu verlieren."""
+        with self.lock:
+            self.matcher = KeywordMatcher(keywords)
+            self.categories = [c for c in keywords if c != "clip"]
+            for cat in self.categories:
+                self.chat.setdefault(cat, np.zeros(self.cap))
+
     def _ensure(self, idx: int) -> None:
         if idx < self.cap:
             return

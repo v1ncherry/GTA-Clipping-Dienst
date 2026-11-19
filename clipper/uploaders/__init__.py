@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import threading
+from pathlib import Path
 
 from ..db import DB
 from . import instagram, tiktok, youtube
@@ -28,6 +29,7 @@ class UploadManager:
         self.cfg = cfg
         self.db = db
         self.lock = threading.Lock()
+        self.on_result = None   # Callback(clip, account, ok, detail) für Benachrichtigungen
 
     def upload_clip(self, clip_id: int, account_ids: list[int]) -> list[int]:
         clip = self.db.get_clip(clip_id)
@@ -54,14 +56,26 @@ class UploadManager:
             if account["platform"] == "youtube":
                 url = youtube.upload(self.cfg, account, self.db, path, t["title"], t["description"], t["tags"])
             elif account["platform"] == "tiktok":
-                url = tiktok.upload(self.cfg, account, self.db, path, t["caption"])
+                long_path = clip.get("long_path")
+                url = tiktok.upload(self.cfg, account, self.db,
+                                    long_path if long_path and Path(long_path).exists() else path, t["caption"])
             elif account["platform"] == "instagram":
                 url = instagram.upload(self.cfg, account, self.db, path, t["caption"])
             else:
                 raise ValueError(f"Unbekannte Plattform {account['platform']}")
             self.db.update_upload(upload_id, status="done", url=url)
             self.db.update_clip(clip_id, status="uploaded")
+            try:
+                from ..learn import record
+
+                record(self.cfg, self.db, clip, "good")
+            except Exception:  # noqa: BLE001
+                log.exception("Feedback konnte nicht gespeichert werden")
             log.info("Clip %s hochgeladen auf %s (%s): %s", clip_id, account["platform"], account["name"], url)
+            if self.on_result:
+                self.on_result(clip, account, True, url)
         except Exception as exc:  # noqa: BLE001
             log.exception("Upload Clip %s -> %s fehlgeschlagen", clip_id, account["name"])
             self.db.update_upload(upload_id, status="failed", error=str(exc)[:1000])
+            if self.on_result:
+                self.on_result(clip, account, False, str(exc)[:300])

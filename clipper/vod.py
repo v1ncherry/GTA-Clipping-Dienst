@@ -13,7 +13,7 @@ from datetime import datetime
 from pathlib import Path
 
 from .chatlog import save_clip_chat
-from .config import data_path, effective_config
+from .config import data_path, effective_config, keyword_spec
 from .db import DB
 from .detector import Detector
 from .platforms.base import ChatMessage
@@ -79,7 +79,7 @@ def run_vod(cfg: dict, db: DB, processor, source: str, streamer: dict, chat_file
     info = probe(cfg, path)
     log.info("Analysiere %s (%.0f min, %d Chat-Nachrichten) …", path.name, info["duration"] / 60, len(chat))
 
-    tl = Timeline(scfg["keywords"], scfg.get("chat_filter"))
+    tl = Timeline(keyword_spec(scfg), scfg.get("chat_filter"))
     t0 = time.time()
     MediaAnalyzer(cfg, tl).analyze(path, 0.0, has_audio=info["has_audio"])
     log.info("Bild/Ton analysiert in %.0fs", time.time() - t0)

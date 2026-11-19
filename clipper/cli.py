@@ -32,18 +32,23 @@ def start_services(cfg: dict):
     import time
 
     from .monitor import Orchestrator
+    from .notify import Autopilot
     from .processing import Processor
     from .uploaders import UploadManager
     from .web.app import create_app
 
     db = _db(cfg)
+    ip = _lan_ip()
+    lan_url = f"http://{ip}:{int(cfg['web']['port'])}" if ip else None
+    uploader = UploadManager(cfg, db)
+    autopilot = Autopilot(cfg, db, uploader, lan_url)
+    uploader.on_result = autopilot.upload_result
     processor = Processor(cfg, db)
+    processor.on_ready = autopilot.clip_ready
     processor.start()
     orchestrator = Orchestrator(cfg, db, processor)
     orchestrator.start()
-    ip = _lan_ip()
-    lan_url = f"http://{ip}:{int(cfg['web']['port'])}" if ip else None
-    app = create_app(cfg, db, orchestrator, processor, UploadManager(cfg, db), started=time.time(), lan_url=lan_url)
+    app = create_app(cfg, db, orchestrator, processor, uploader, started=time.time(), lan_url=lan_url)
     return db, orchestrator, app, lan_url
 
 

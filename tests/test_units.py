@@ -301,3 +301,119 @@ def test_question_detection_in_transcript():
     ws = [Word(10, 10.3, "Chat,"), Word(10.4, 10.7, "soll"), Word(10.8, 11, "ich"), Word(11.1, 11.5, "springen?")]
     assert asked_chat_question(ws, 9, 12)
     assert not asked_chat_question([Word(10, 11, "Alter"), Word(11, 12, "krass!")], 9, 12)
+
+
+def test_custom_keyword_special_moment():
+    import random as _r
+
+    from clipper.config import keyword_spec
+    from clipper.detector import Detector
+    from clipper.signals import Timeline
+    from clipper.texts import template_texts
+
+    cfg = deep_merge(DEFAULTS, {})
+    tl = Timeline(keyword_spec(cfg))
+    rng = _r.Random(2)
+    for s in range(900):
+        for _ in range(2):
+            tl.add_chat(s + rng.random(), f"u{rng.randint(1, 300)}", rng.choice(["hallo", "gg", "nice", "wie gehts"]))
+        for q in range(4):
+            tl.add_audio(s + q * 0.25, -30 + rng.gauss(0, 2))
+        tl.add_motion(s, 0.03)
+    for s in range(605, 612):
+        tl.add_chat(s + 0.3, f"fan{s}", "STRIPCLUB 💀")
+        tl.add_chat(s + 0.6, f"fanb{s}", "er geht in den strip club")
+    events = []
+    det = Detector(tl, cfg, lag=5, on_event=events.append)
+    det.advance(900)
+    det.finalize()
+    kw = [e for e in events if e["category"] == "stichwort"]
+    assert len(kw) == 1 and kw[0]["breakdown"]["keyword"] in ("stripclub", "strip club")
+    t = template_texts({"name": "Papaplatte"}, "stichwort", 1, keyword=kw[0]["breakdown"]["keyword"])
+    assert "Papaplatte" in t["title"] and "Strip" in t["title"]
+
+
+def test_learning_from_discards(tmp_path):
+    from clipper.db import DB
+    from clipper.learn import last_note, record
+
+    db = DB(str(tmp_path / "l.db"))
+    sid = db.add_streamer("S", "https://www.twitch.tv/s", "twitch", "s")
+    cfg = deep_merge(DEFAULTS, {})
+    notes = []
+    for i in range(3):
+        cid = db.add_clip(streamer_id=sid, source="auto", dir=str(tmp_path))
+        notes.append(record(cfg, db, db.get_clip(cid), "bad", "spam"))
+    assert notes[:2] == [None, None] and notes[2]
+    det = db.get_streamer(sid)["settings"]["detection"]
+    assert det["stream_share"] == DEFAULTS["detection"]["stream_share"] + 5
+    assert det["trigger_score"] == DEFAULTS["detection"]["trigger_score"] + 1
+    assert last_note(db, sid)["changes"]["stream_share"] == det["stream_share"]
+    # danach wird neu gezählt: ein weiterer Spam-Clip ändert nichts
+    cid = db.add_clip(streamer_id=sid, source="auto", dir=str(tmp_path))
+    assert record(cfg, db, db.get_clip(cid), "bad", "spam") is None
+
+
+def test_tiktok_long_window():
+    from clipper.processing import long_window
+
+    cfg = deep_merge(DEFAULTS, {})
+    ls, le = long_window(cfg, 100.0, 140.0, 300.0)
+    assert 62 <= le - ls <= 90 and ls < 100 and le >= 140
+    assert long_window(cfg, 0.0, 30.0, 40.0) is None             # zu wenig Material
+    ls, le = long_window(cfg, 5.0, 45.0, 200.0)                  # vorne kaum Platz -> hinten verlängern
+    assert ls == 0.0 and le - ls >= 62
+    assert long_window(deep_merge(DEFAULTS, {"render": {"tiktok_long": False}}), 100, 140, 300) is None
+
+
+def test_notifications_and_autopilot(tmp_path, monkeypatch):
+    import http.server
+    import json as _json
+    import threading as _t
+
+    from clipper.db import DB
+    from clipper.notify import Autopilot, send_sync
+
+    got = []
+
+    class H(http.server.BaseHTTPRequestHandler):
+        def do_POST(self):  # noqa: N802
+            got.append(self.rfile.read(int(self.headers["Content-Length"])).decode())
+            self.send_response(204)
+            self.end_headers()
+
+        def log_message(self, *a):
+            pass
+
+    srv = http.server.HTTPServer(("127.0.0.1", 0), H)
+    _t.Thread(target=srv.serve_forever, daemon=True).start()
+    monkeypatch.setenv("NO_PROXY", "127.0.0.1,localhost")
+    monkeypatch.setenv("no_proxy", "127.0.0.1,localhost")
+    hook = f"http://127.0.0.1:{srv.server_port}/api/webhooks/x"
+    cfg = deep_merge(DEFAULTS, {"notify": {"discord_webhook": hook}})
+    assert send_sync(cfg, "Hallo") == []
+    assert _json.loads(got[-1])["content"] == "Hallo"
+
+    db = DB(str(tmp_path / "a.db"))
+    sid = db.add_streamer("S", "https://www.twitch.tv/s", "twitch", "s")
+    aid = db.add_account("tiktok", "clips", {})
+    db.set_setting("global", {"autopilot": {"enabled": True, "min_score": 90}, "notify": {"discord_webhook": hook}})
+    calls = []
+
+    class FakeUploader:
+        def upload_clip(self, cid, ids):
+            calls.append((cid, ids))
+
+    ap = Autopilot(DEFAULTS, db, FakeUploader(), "http://pc:8686")
+    strong = db.add_clip(streamer_id=sid, source="auto", score=96, title="Krass", status="ready")
+    weak = db.add_clip(streamer_id=sid, source="auto", score=80, title="Naja", status="ready")
+    ap.clip_ready(strong)
+    ap.clip_ready(weak)
+    ap.clip_ready(strong, first=False)          # Neu rendern: keine zweite Meldung/kein zweiter Upload
+    assert calls == [(strong, [aid])]
+    import time as _time
+    _time.sleep(0.5)
+    texts = [_json.loads(g)["content"] for g in got[1:]]
+    assert any("automatisch hochgeladen" in t and "Krass" in t for t in texts)
+    assert any("Naja" in t for t in texts) and len(texts) == 2
+    srv.shutdown()

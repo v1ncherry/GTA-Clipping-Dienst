@@ -13,7 +13,8 @@ const state = {
 };
 
 const CAT = { funny: "😂 Lustig", hype: "🔥 Hype", shock: "😳 Schock", fail: "💀 Fail", action: "💥 Action",
-  easteregg: "🥚 Easter Egg", glitch: "🤖 Glitch", spannung: "😶 Spannung" };
+  easteregg: "🥚 Easter Egg", glitch: "🤖 Glitch", spannung: "😶 Spannung", stichwort: "🔑 Stichwort" };
+const DISCARD_REASONS = [["spam", "Nur Chat-Spam"], ["boring", "Langweilig"], ["cut", "Falscher Ausschnitt"], ["other", "Anderes"]];
 const LAYOUTS = [["auto", "Automatisch"], ["stack", "Facecam oben"], ["stack_chat", "Facecam + Chat oben"],
   ["crop", "Nur Gameplay"], ["crop_chat", "Gameplay + Chat"], ["blur", "Ganzes Bild"]];
 const CLIP_STATUS = { queued: "Wartet", processing: "Wird verarbeitet", ready: "Bereit", failed: "Fehler",
@@ -59,6 +60,10 @@ const sliderToTrigger = (v) => Math.round(90 - v * 0.35);
 /* ================================================================== Navigation */
 $$("nav a").forEach((a) => a.addEventListener("click", () => show(a.dataset.view)));
 document.addEventListener("click", (e) => { const g = e.target.closest("[data-goto]"); if (g) show(g.dataset.goto); });
+window.addEventListener("hashchange", () => {
+  const v = location.hash.slice(1);
+  if (v !== state.view && document.getElementById(`view-${v}`)) show(v);
+});
 
 function show(view) {
   state.view = view;
@@ -296,6 +301,7 @@ function renderDetail() {
             : `<span class="muted small">Noch keine Accounts verbunden – <a href="#accounts" data-goto="accounts">verbinden</a>.</span>`}</div></div>
         <div class="upload-bar"><button class="btn primary big" data-act="upload" ${c.video_url && state.accounts.length ? "" : "disabled"}>${icon("up")}Hochladen</button>
           <div class="uploads">${uploadsHtml(c.uploads)}</div></div>
+        ${c.long_url ? `<p class="muted small" style="margin:-6px 0 0">TikTok bekommt die lange Fassung (${Math.round(c.long_duration || 0)} Sek., über 1 Minute) · <a href="${c.long_url}" target="_blank" rel="noopener">ansehen</a></p>` : ""}
         <div class="layout-box">
           <div class="inline"><b style="flex:1">Layout</b>
             <select data-o="layout">${LAYOUTS.map(([v, l]) => `<option value="${v}" ${opts.layout === v ? "selected" : ""}>${l}</option>`).join("")}</select></div>
@@ -316,8 +322,11 @@ function renderDetail() {
         <div class="foot-actions">
           ${c.video_url ? `<a class="btn plain" href="${c.video_url}" download>${icon("down")}Herunterladen</a>` : ""}
           <span class="spacer"></span>
-          <button class="btn plain danger" data-act="discard">${icon("trash")}Verwerfen</button>
+          <button class="btn plain danger" data-act="discard">${icon("trash")}${c.status === "filtered" ? "Löschen" : "Verwerfen"}</button>
         </div>
+        <div class="discard-why" hidden><span class="muted small">Warum? ClipStream lernt daraus.</span>
+          ${DISCARD_REASONS.map(([k, l]) => `<button class="btn" data-reason="${k}">${l}</button>`).join("")}
+          <button class="btn plain" data-reason="">Abbrechen</button></div>
       </div>
     </div>`;
   bindDetail(pane, c);
@@ -376,16 +385,23 @@ function bindDetail(pane, c) {
   };
   act("rerender", () => rerender("Wird neu gerendert …"));
   act("force", () => rerender("Wird trotzdem gerendert …"));
-  act("discard", async () => {
-    if (!confirm("Clip verwerfen und Dateien löschen?")) return;
-    await api("DELETE", `/api/clips/${c.id}`);
+  const discard = async (reason) => {
+    const res = await api("DELETE", `/api/clips/${c.id}${reason ? `?reason=${reason}` : ""}`);
     const idx = state.clips.findIndex((x) => x.id === c.id);
     state.clips.splice(idx, 1);
     state.selected = state.clips[Math.min(idx, state.clips.length - 1)]?.id ?? null;
     state.detailSig = "";
-    toast("Verworfen");
+    toast(res.learned ? `Verworfen – ${res.learned}` : "Verworfen");
     renderClipList(); renderDetail();
+  };
+  act("discard", async () => {
+    if (c.status === "filtered") { if (confirm("Aussortierten Clip löschen?")) await discard(""); return; }
+    pane.querySelector(".discard-why").hidden = false;
   });
+  $$("[data-reason]", pane).forEach((b) => b.addEventListener("click", () => {
+    if (!b.dataset.reason) { pane.querySelector(".discard-why").hidden = true; return; }
+    discard(b.dataset.reason).catch((e) => toast(e.message, true));
+  }));
 }
 
 document.addEventListener("keydown", (e) => {
@@ -437,7 +453,9 @@ function renderStreamer(s) {
   const trig = det.trigger_score;
   const opt = (pairs, cur) => pairs.map(([v, l]) => `<option value="${v}" ${String(cur ?? "") === v ? "selected" : ""}>${l}</option>`).join("");
   const layoutName = (LAYOUTS.find(([v]) => v === rnd.layout) || [null, "Standard-Layout"])[1];
+  const share = det.stream_share;
   const summary = [trig ? `Schwelle ${trig}` : "Standard-Empfindlichkeit", layoutName, `Facecam ${fc}`].join(" · ");
+  const learned = s.learned ? `<div class="row-item"><div class="lbl"><b>Automatisch angepasst</b><small>${esc(s.learned.note)} · ${ago(s.learned.time)}</small></div></div>` : "";
   el.innerHTML = `
     <div class="head"><div class="avatar">${esc(s.name[0].toUpperCase())}</div>
       <div class="who"><b>${esc(s.name)}</b> <span class="pf">${PF[s.platform] || s.platform}</span><span class="summary">${esc(summary)}</span></div>
@@ -446,6 +464,10 @@ function renderStreamer(s) {
     <div class="row-item"><div class="lbl"><b>Empfindlichkeit</b><small>${trig ? `Eigene Einstellung (Schwelle ${trig})` : "Wie in den Einstellungen"}</small></div>
       <div style="flex:1;max-width:320px"><div class="slider-row"><span>Weniger</span><input type="range" min="0" max="100" data-k="trigger" value="${triggerToSlider(trig || (state.settings?.["detection.trigger_score"] ?? 72))}"><span>Mehr Clips</span></div></div>
       ${trig ? `<button class="btn plain" data-k="trigger-reset">Standard</button>` : ""}</div>
+    <div class="row-item"><div class="lbl"><b>Worauf achten?</b><small>${share != null ? `${100 - share} % Chat · ${share} % Stream (eigene Einstellung)` : "Wie in den Einstellungen"}</small></div>
+      <div style="flex:1;max-width:320px"><div class="slider-row"><span>Chat</span><input type="range" min="0" max="100" step="5" data-k="share" value="${share ?? (state.settings?.["detection.stream_share"] ?? 40)}"><span>Stream</span></div></div>
+      ${share != null ? `<button class="btn plain" data-k="share-reset">Standard</button>` : ""}</div>
+    ${learned}
     <div class="row-item"><div class="lbl"><b>Sprache</b><small>Untertitel und Titel</small></div>
       <select data-s="transcription.language">${opt([["", "Standard"], ["de", "Deutsch"], ["en", "Englisch"], ["auto", "Automatisch"], ["tr", "Türkisch"], ["ar", "Arabisch"]], tr.language)}</select></div>
     <div class="row-item"><div class="lbl"><b>Layout</b><small>Für neue Clips dieses Streamers</small></div>
@@ -468,6 +490,14 @@ function renderStreamer(s) {
   el.querySelector('[data-k="enabled"]').addEventListener("change", (e) => patch({ enabled: e.target.checked }, e.target.checked ? "Wird überwacht" : "Pausiert"));
   el.querySelector('[data-k="trigger"]').addEventListener("change", async (e) => {
     await patch({ settings: { detection: { trigger_score: sliderToTrigger(+e.target.value) } } });
+    loadStreamers();
+  });
+  el.querySelector('[data-k="share"]').addEventListener("change", async (e) => {
+    await patch({ settings: { detection: { stream_share: +e.target.value } } });
+    loadStreamers();
+  });
+  el.querySelector('[data-k="share-reset"]')?.addEventListener("click", async () => {
+    await patch({ settings: { detection: { stream_share: null } } }, "Zurückgesetzt");
     loadStreamers();
   });
   el.querySelector('[data-k="trigger-reset"]')?.addEventListener("click", async () => {
@@ -608,6 +638,7 @@ function renderSettings() {
       <div class="row-item col"><div class="lbl"><b>Strenge</b></div>
         <div class="slider-row"><span>Locker</span><input type="range" min="0" max="100" step="5" data-r="strict" value="${filterToStrict(s)}"><span>Streng</span></div></div>
       <div class="row-item"><div class="lbl"><b>Fragen an den Chat erkennen</b><small>Prüft im Transkript, ob der Streamer kurz vorher den Chat etwas gefragt hat</small></div>${sw("filters.question_check", s["filters.question_check"])}</div>
+      <div class="row-item"><div class="lbl"><b>Aus Feedback lernen</b><small>Beim Verwerfen den Grund antippen, Hochladen zählt als gut – jeder Streamer wird dann behutsam nachjustiert</small></div>${sw("learn.enabled", s["learn.enabled"])}</div>
     </div>
 
     <h3 class="group-title">Spezial-Momente</h3>
@@ -616,6 +647,8 @@ function renderSettings() {
       <div class="row-item"><div class="lbl"><b>🥚 Easter Eggs & Geheimnisse</b><small>Chat schreibt „Easter Egg“, „secret“, „Referenz“ …</small></div>${sw("cat:easteregg", cats.includes("easteregg"))}</div>
       <div class="row-item"><div class="lbl"><b>🤖 Glitches & Bugs</b><small>Chat schreibt „glitch“, „bug“, „kaputt“ …</small></div>${sw("cat:glitch", cats.includes("glitch"))}</div>
       <div class="row-item"><div class="lbl"><b>😶 Plötzliche Stille</b><small>Sonst aktiver Chat wird still – Spannung, Story, alle schauen gebannt</small></div>${sw("special.silence", s["special.silence"])}</div>
+      <div class="row-item col"><div class="row-main" style="justify-content:space-between"><div class="lbl"><b>🔑 Eigene Stichwörter</b><small>Orte, Insider, Namen – fallen sie gehäuft im Chat, wird geclippt. Mit Komma trennen.</small></div>${sw("cat:stichwort", cats.includes("stichwort"))}</div>
+        <input data-t="special.keywords" value="${esc((s["special.keywords"] || []).join(", "))}" placeholder="z.B. stripclub, ufo, polizei"></div>
     </div>
 
     <h3 class="group-title">Clips</h3>
@@ -626,8 +659,29 @@ function renderSettings() {
         <div class="seg" data-g="render.cam_size">${[["s", "Klein"], ["m", "Mittel"], ["l", "Groß"]].map(([v, l]) => `<button type="button" data-v="${v}" class="${s["render.cam_size"] === v ? "on" : ""}">${l}</button>`).join("")}</div></div>
       <div class="row-item"><div class="lbl"><b>Chat einblenden</b><small>Bei „Automatisch“: neben der Facecam bzw. über dem Gameplay</small></div>${sw("render.chat_overlay", s["render.chat_overlay"])}</div>
       <div class="row-item"><div class="lbl"><b>Hook-Text am Anfang</b><small>z.B. „WARTE AUF DAS ENDE“</small></div>${sw("render.hook_text", s["render.hook_text"])}</div>
+      <div class="row-item"><div class="lbl"><b>TikTok-Langversion</b><small>Zusätzlich eine Fassung über 1 Minute (nur solche Videos vergütet TikTok). TikTok-Uploads nehmen automatisch diese.</small></div>${sw("render.tiktok_long", s["render.tiktok_long"])}</div>
       <div class="row-item"><div class="lbl"><b>Maximale Länge</b><small>Sekunden</small></div>
         <input type="number" min="15" max="180" style="width:80px" data-n="clips.max_seconds" value="${s["clips.max_seconds"] ?? 60}"></div>
+    </div>
+
+    <h3 class="group-title">Autopilot & Benachrichtigungen</h3>
+    <div class="group">
+      <div class="row-item"><div class="lbl"><b>Starke Clips automatisch hochladen</b><small>Auf die Standard-Upload-Ziele des Streamers (sonst alle Accounts). Manuelle und „trotzdem gerenderte“ Clips nie.</small></div>${sw("autopilot.enabled", s["autopilot.enabled"])}</div>
+      <div class="row-item col"><div class="lbl"><b>Ab Score</b><small id="ap-label">${s["autopilot.min_score"] ?? 95}</small></div>
+        <div class="slider-row"><span>80</span><input type="range" min="80" max="100" data-r="autopilot" value="${s["autopilot.min_score"] ?? 95}"><span>100</span></div></div>
+      <div class="row-item col"><div class="lbl"><b>Discord</b><small>Webhook-Adresse: Discord-Kanal → Bearbeiten → Integrationen → Webhooks → Neuer Webhook → URL kopieren</small></div>
+        <div class="inline"><input type="password" data-sec="notify.discord_webhook" placeholder="${s["notify.discord_webhook"] ? "gesetzt ✓ – neu eintragen zum Ändern" : "https://discord.com/api/webhooks/…"}">
+          ${s["notify.discord_webhook"] ? `<button class="btn plain danger" data-clear="notify.discord_webhook">Entfernen</button>` : ""}</div></div>
+      <div class="row-item col"><div class="lbl"><b>Telegram</b><small>Bot über @BotFather anlegen → Token. Chat-ID z.B. über @userinfobot.</small></div>
+        <div class="inline"><input type="password" data-sec="notify.telegram_token" placeholder="${s["notify.telegram_token"] ? "Token gesetzt ✓" : "Bot-Token"}">
+          <input data-t="notify.telegram_chat_id" value="${esc(s["notify.telegram_chat_id"] || "")}" placeholder="Chat-ID" style="flex:0 1 160px">
+          ${s["notify.telegram_token"] ? `<button class="btn plain danger" data-clear="notify.telegram_token">Entfernen</button>` : ""}</div></div>
+      <div class="row-item"><div class="lbl"><b>Melden bei neuem Clip</b><small>ab Score ${s["notify.min_score"] ?? 0}</small></div>
+        <input type="number" min="0" max="100" style="width:80px" data-n="notify.min_score" value="${s["notify.min_score"] ?? 0}">${sw("notify.on_ready", s["notify.on_ready"])}</div>
+      <div class="row-item"><div class="lbl"><b>Melden bei Upload</b><small>Erfolg und Fehler</small></div>${sw("notify.on_upload", s["notify.on_upload"])}</div>
+      <div class="row-item col"><div class="lbl"><b>Link in der Nachricht</b><small>Adresse, unter der ihr das Dashboard vom Handy erreicht (z.B. Tailscale). Leer = Adresse im WLAN.</small></div>
+        <input data-t="notify.public_url" value="${esc(s["notify.public_url"] || "")}" placeholder="http://…:8686"></div>
+      <div class="row-item"><span class="spacer"></span><button class="btn" data-act="notify-test">Test-Nachricht senden</button></div>
     </div>
 
     <h3 class="group-title">Allgemein</h3>
@@ -642,6 +696,20 @@ function renderSettings() {
   root.querySelector('[data-r="share"]').addEventListener("change", (e) => putSettings({ "detection.stream_share": +e.target.value }));
   root.querySelector('[data-r="trigger"]').addEventListener("change", async (e) => { await putSettings({ "detection.trigger_score": sliderToTrigger(+e.target.value) }); renderSettings(); });
   root.querySelector('[data-r="strict"]').addEventListener("change", (e) => putSettings(strictToFilter(+e.target.value)));
+  root.querySelector('[data-r="autopilot"]').addEventListener("input", (e) => { $("#ap-label").textContent = e.target.value; });
+  root.querySelector('[data-r="autopilot"]').addEventListener("change", (e) => putSettings({ "autopilot.min_score": +e.target.value }));
+  $$("[data-sec]", root).forEach((i) => i.addEventListener("change", async () => {
+    if (!i.value.trim()) return;
+    await putSettings({ [i.dataset.sec]: i.value.trim() }, "Gespeichert – jetzt „Test-Nachricht senden“");
+    renderSettings();
+  }));
+  $$("[data-clear]", root).forEach((b) => b.addEventListener("click", async () => {
+    await putSettings({ [b.dataset.clear]: "" }, "Entfernt");
+    renderSettings();
+  }));
+  root.querySelector('[data-act="notify-test"]').addEventListener("click", async () => {
+    try { await api("POST", "/api/notify/test"); toast("Test-Nachricht gesendet"); } catch (e) { toast(e.message, true); }
+  });
   $$("[data-w]", root).forEach((r) => {
     r.addEventListener("input", () => { root.querySelector(`[data-wl="${r.dataset.w}"]`).textContent = r.value; });
     r.addEventListener("change", () => putSettings({ "detection.weights": Object.fromEntries($$("[data-w]", root).map((x) => [x.dataset.w, +x.value / 100])) }));

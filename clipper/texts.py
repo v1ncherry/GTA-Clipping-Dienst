@@ -25,6 +25,7 @@ TITLES = {
     "glitch": ["Der verrückteste Glitch überhaupt 🤖", "Das Spiel ist komplett kaputt gegangen 💀",
                "{n} findet einen absurden Bug 😂"],
     "spannung": ["Der ganze Chat hat die Luft angehalten 😳", "Absolute Gänsehaut-Szene 🥶", "Niemand hat geatmet… 😶"],
+    "stichwort": ["{kw}-Moment mit {n} 😂", "{n} und der {kw} 💀", "Was macht {n} im {kw}? 😳"],
 }
 HOOKS = {
     "funny": ["ER KANN NICHT MEHR", "CHAT ESKALIERT", "WIE KANN DAS SEIN"],
@@ -35,10 +36,12 @@ HOOKS = {
     "easteregg": ["GEHEIMES EASTER EGG", "KANNTEST DU DAS?", "VERSTECKT IM SPIEL"],
     "glitch": ["DAS SPIEL IST KAPUTT", "WAS IST DAS FÜR EIN BUG", "WARTE AUF DAS ENDE"],
     "spannung": ["ALLE WAREN STILL", "GÄNSEHAUT", "WARTE AUF DAS ENDE"],
+    "stichwort": ["{KW}", "WARTE AUF DAS ENDE", "{KW}-MOMENT"],
 }
 CATEGORY_TAGS = {
     "funny": ["#funny", "#lustig"], "hype": ["#viral"], "shock": ["#wtf"], "fail": ["#fail"], "action": ["#action"],
     "easteregg": ["#eastereggs", "#secret"], "glitch": ["#glitch", "#bug"], "spannung": ["#spannung"],
+    "stichwort": ["#funny"],
 }
 
 # Englischsprachige Streamer (Sprache „en“): englische Titel, Hooks und Hashtags passend zu den Untertiteln
@@ -52,6 +55,7 @@ TITLES_EN = {
     "easteregg": ["{n} finds a secret easter egg 🥚", "Almost nobody knew this easter egg 👀", "Did you know THIS? 🤫"],
     "glitch": ["The craziest glitch ever 🤖", "The game completely broke 💀", "{n} finds an absurd bug 😂"],
     "spannung": ["The whole chat held its breath 😳", "Absolute goosebumps scene 🥶", "Nobody was breathing… 😶"],
+    "stichwort": ["{kw} moment with {n} 😂", "{n} at the {kw} 💀", "What is {n} doing at the {kw}? 😳"],
 }
 HOOKS_EN = {
     "funny": ["HE CAN'T TAKE IT", "CHAT LOST IT", "HOW IS THAT POSSIBLE"],
@@ -62,10 +66,12 @@ HOOKS_EN = {
     "easteregg": ["SECRET EASTER EGG", "DID YOU KNOW THIS?", "HIDDEN IN THE GAME"],
     "glitch": ["THE GAME IS BROKEN", "WHAT IS THIS BUG", "WAIT FOR THE END"],
     "spannung": ["CHAT WENT SILENT", "GOOSEBUMPS", "WAIT FOR THE END"],
+    "stichwort": ["{KW}", "WAIT FOR THE END", "{KW} MOMENT"],
 }
 CATEGORY_TAGS_EN = {
     "funny": ["#funny"], "hype": ["#viral"], "shock": ["#wtf"], "fail": ["#fail"], "action": ["#action"],
     "easteregg": ["#eastereggs", "#secret"], "glitch": ["#glitch", "#bug"], "spannung": ["#suspense"],
+    "stichwort": ["#funny"],
 }
 
 
@@ -100,12 +106,16 @@ def build_caption(title: str, hashtags: list[str], streamer: dict) -> str:
     return f"{title}\n\n🎥 {credit_line(streamer)}\n\n{' '.join(hashtags)}"
 
 
-def template_texts(streamer: dict, category: str, seed: int, lang: str = "de") -> dict:
+def template_texts(streamer: dict, category: str, seed: int, lang: str = "de", keyword: str | None = None) -> dict:
     rng = random.Random(seed)
     titles, hooks = (TITLES_EN, HOOKS_EN) if lang == "en" else (TITLES, HOOKS)
     cat = category if category in titles else "hype"
+    if cat == "stichwort" and not keyword:
+        cat = "hype"
     name = streamer.get("name", "He" if lang == "en" else "Er")
-    return {"title": rng.choice(titles[cat]).format(n=name), "hook": rng.choice(hooks[cat])}
+    kw = (keyword or "").strip().title()
+    fmt = {"n": name, "kw": kw, "KW": kw.upper()}
+    return {"title": rng.choice(titles[cat]).format(**fmt), "hook": rng.choice(hooks[cat]).format(**fmt)}
 
 
 SYSTEM_PROMPT = """Du bist Social-Media-Editor für virale Gaming-Shorts (TikTok, YouTube Shorts, Instagram Reels).
@@ -155,7 +165,8 @@ def llm_texts(cfg: dict, streamer: dict, category: str, transcript: str, chat_sa
 
 def make_texts(cfg: dict, streamer: dict, clip: dict) -> dict:
     category = clip.get("category") or "hype"
-    base = template_texts(streamer, category, seed=int(clip.get("id") or 0), lang=text_language(cfg))
+    base = template_texts(streamer, category, seed=int(clip.get("id") or 0), lang=text_language(cfg),
+                          keyword=(clip.get("breakdown") or {}).get("keyword"))
     llm = llm_texts(cfg, streamer, category, clip.get("transcript") or "", clip.get("chat_sample") or [],
                     clip.get("stream_title") or "") or {}
     title = llm.get("title") or base["title"]

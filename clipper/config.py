@@ -51,7 +51,7 @@ DEFAULTS: dict[str, Any] = {
         "auto_lag": True,
         # Hauptregler: Anteil des Streams (Lautstärke + Bewegung) am Score in Prozent, Rest = Chat.
         # 0 = nur Chat, 100 = nur Stream-Reaktion.
-        "stream_share": 35,
+        "stream_share": 40,
         # Feinregler: Gewichte innerhalb der Gruppen Chat (chat_rate, chatters, emotes) und Stream (audio, motion).
         "weights": {"chat_rate": 0.35, "chatters": 0.15, "emotes": 0.25, "audio": 0.15, "motion": 0.10},
         # "Stream-Moment" unabhängig vom Chat (Schreien, Explosionen, Action).
@@ -64,10 +64,10 @@ DEFAULTS: dict[str, Any] = {
     "filters": {
         "enabled": True,
         # Chat beantwortet eine Frage: viele kurze Antworten (ja/nein/Zahlen/Namen), kaum Emotes/Lachen
-        "max_answer_ratio": 0.45,
+        "max_answer_ratio": 0.38,
         # Ein Chat-Ausbruch braucht Emotes/Lachen/Schock (Anteil) ODER eine Reaktion im Stream (z-Wert Ton/Bild)
-        "min_hype_ratio": 0.25,
-        "min_stream_reaction": 1.0,
+        "min_hype_ratio": 0.30,
+        "min_stream_reaction": 1.2,
         # So viele Sekunden nach einem Raid / einer Sub-Geschenkwelle wird nicht geclippt
         "raid_seconds": 90,
         # Nach dem Transkribieren: Hat der Streamer kurz vorher den Chat etwas gefragt?
@@ -78,8 +78,10 @@ DEFAULTS: dict[str, Any] = {
     # Spezial-Momente, die auch ohne großen Hype geclippt werden
     "special": {
         "enabled": True,
-        # Chat erwähnt Easter Eggs / Geheimnisse bzw. Glitches / Bugs auffällig oft
-        "categories": ["easteregg", "glitch"],
+        # Chat erwähnt Easter Eggs / Geheimnisse, Glitches / Bugs oder eigene Stichwörter auffällig oft
+        "categories": ["easteregg", "glitch", "stichwort"],
+        # Eigene Stichwörter (Orte, Insider, Namen …) – fallen sie gehäuft im Chat, wird geclippt
+        "keywords": ["stripclub", "strip club", "stripper"],
         "min_mentions": 4,
         "min_z": 3.0,
         # Chat wird plötzlich still/gebannt (Story, Spannung), obwohl er sonst aktiv ist
@@ -90,6 +92,20 @@ DEFAULTS: dict[str, Any] = {
         "cooldown_seconds": 90,
         "max_per_hour": 4,
     },
+    # Autopilot: sehr starke Clips automatisch auf die Standard-Upload-Ziele des Streamers hochladen
+    "autopilot": {"enabled": False, "min_score": 95},
+    # Benachrichtigungen aufs Handy: Discord-Webhook und/oder Telegram-Bot
+    "notify": {
+        "discord_webhook": "",
+        "telegram_token": "",
+        "telegram_chat_id": "",
+        "min_score": 0,          # nur Clips ab diesem Score melden
+        "on_ready": True,        # neuer Clip fertig
+        "on_upload": True,       # Upload erfolgreich / fehlgeschlagen
+        "public_url": "",        # Link in der Nachricht, z.B. Tailscale-Adresse des Dashboards
+    },
+    # Aus Feedback lernen (Verwerfen mit Grund / Hochladen) und Streamer automatisch nachjustieren
+    "learn": {"enabled": True},
     "chat_filter": {
         # Bot-Befehle (!giveaway, !vote …) ignorieren; "!clip" zählt weiter als Clip-Ruf
         "ignore_commands": True,
@@ -167,6 +183,9 @@ DEFAULTS: dict[str, Any] = {
         "cam_size": "m",
         # Chat ins Video einblenden (bei "auto": neben der Facecam bzw. über dem Gameplay)
         "chat_overlay": False,
+        # Zusätzliche, längere Fassung für TikTok (über 1 Minute – nur solche Videos werden vergütet)
+        "tiktok_long": True,
+        "long_seconds": 70,
         "loudnorm": True,
         "hook_text": True,
         "hook_seconds": 3.5,
@@ -218,6 +237,15 @@ DEFAULTS: dict[str, Any] = {
         },
     },
 }
+
+
+def keyword_spec(cfg: dict) -> dict:
+    """Chat-Kategorien inkl. der eigenen Stichwörter aus den Einstellungen (Kategorie "stichwort")."""
+    spec = dict(cfg["keywords"])
+    words = [w for w in (cfg.get("special") or {}).get("keywords") or [] if str(w).strip()]
+    if words:
+        spec["stichwort"] = {"weight": 1.0, "tokens": words}
+    return spec
 
 
 def deep_merge(base: dict, over: dict | None) -> dict:

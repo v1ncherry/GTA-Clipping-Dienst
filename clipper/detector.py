@@ -288,6 +288,11 @@ class Detector:
         ev = self.build_event(moment - 10, moment + 5, moment, score, parts, source="special", category=category,
                               window=window)
         ev["breakdown"]["special_mentions"] = int(cnt)
+        if category == "stichwort":
+            texts = [m[2].lower() for m in self.tl.messages_between(c - 7, c + 8)]
+            words = [str(w) for w in self.sp.get("keywords") or []]
+            if words:
+                ev["breakdown"]["keyword"] = max(words, key=lambda w: sum(w.lower() in t for t in texts))
         self._emit(ev)
 
     def _silence(self, idx: int, vals: dict, parts: dict) -> None:

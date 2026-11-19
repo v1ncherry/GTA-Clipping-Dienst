@@ -59,6 +59,14 @@ CREATE TABLE IF NOT EXISTS accounts (
     credentials TEXT NOT NULL,
     created_at REAL NOT NULL
 );
+CREATE TABLE IF NOT EXISTS feedback (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    clip_id INTEGER NOT NULL,
+    streamer_id INTEGER NOT NULL,
+    verdict TEXT NOT NULL,
+    reason TEXT,
+    created_at REAL NOT NULL
+);
 CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
@@ -80,7 +88,8 @@ JSON_COLUMNS = {"settings", "facecam", "upload_targets", "breakdown", "chat_samp
 
 # Spalten, die nach der ersten Version dazugekommen sind (werden bei bestehenden Datenbanken nachgerüstet)
 MIGRATIONS = {
-    "clips": {"filter_reason": "TEXT", "forced": "INTEGER NOT NULL DEFAULT 0", "render_opts": "TEXT"},
+    "clips": {"filter_reason": "TEXT", "forced": "INTEGER NOT NULL DEFAULT 0", "render_opts": "TEXT",
+              "long_start": "REAL", "long_end": "REAL", "long_path": "TEXT", "long_duration": "REAL"},
 }
 
 CLIP_STATUSES = ("queued", "processing", "ready", "failed", "uploaded", "filtered", "discarded")
@@ -209,6 +218,11 @@ class DB:
         row = self.one("SELECT COUNT(*) AS n FROM clips WHERE streamer_id = ? AND created_at >= ? "
                        "AND status != 'discarded'", (streamer_id, since))
         return int(row["n"]) if row else 0
+
+    # ------------------------------------------------------------------ feedback
+    def add_feedback(self, clip_id: int, streamer_id: int, verdict: str, reason: str | None = None) -> int:
+        return self._insert("feedback", {"clip_id": clip_id, "streamer_id": streamer_id, "verdict": verdict,
+                                         "reason": reason, "created_at": time.time()})
 
     # ------------------------------------------------------------------ settings
     def get_setting(self, key: str, default=None):

@@ -30,7 +30,14 @@ Clip ──► Whisper-Untertitel ──► Schnitt an Satzgrenzen ──► Fac
   prüft das Transkript, ob der Streamer kurz vorher den Chat etwas gefragt hat. Aussortiertes bleibt unter
   *Clips → Aussortiert* sichtbar und lässt sich per Klick doch rendern.
 - **Spezial-Momente** auch ohne großen Hype: 🥚 Easter Eggs & Geheimnisse, 🤖 Glitches & Bugs, 😶 plötzliche
-  Stille (Spannung – der Chat hält die Luft an).
+  Stille (Spannung – der Chat hält die Luft an), 🔑 **eigene Stichwörter** (z.B. „Stripclub“) – fallen sie gehäuft
+  im Chat, wird geclippt.
+- **Lernt mit**: Beim Verwerfen kurz den Grund antippen (Chat-Spam, langweilig, falscher Ausschnitt),
+  Hochladen zählt als gut. Daraus wird jeder Streamer behutsam nachjustiert (Schwelle, Chat ↔ Stream).
+- **TikTok-Langversion**: zusätzlich eine Fassung über 1 Minute (nur solche Videos vergütet TikTok) – TikTok-Uploads
+  nehmen automatisch diese.
+- **Autopilot** (optional): Clips ab Score 95 automatisch hochladen. **Benachrichtigungen** aufs Handy über
+  Discord-Webhook oder Telegram-Bot bei neuen Clips und Uploads.
 - **Chat-Verzögerung** wird automatisch geschätzt, damit der Clip den Moment *vor* der Chat-Reaktion enthält.
 - **Hochformat 1080×1920**: Facecam wird automatisch erkannt → oben Facecam, unten Gameplay. Der
   Gameplay-Ausschnitt folgt der Action (geglättet) und hält die Facecam raus. Ohne Facecam: Smart-Crop.
@@ -121,10 +128,14 @@ Ganze Links gehen weiterhin. Im Dashboard (Tab **Streamer**) einfach Plattform a
 | **Clips** | Liste links, großer Player rechts. Titel/Hook/Caption/Hashtags anpassen (speichert automatisch), Accounts antippen, **Hochladen**. Layout + Facecam-Größe ändern → „Neu rendern“. Filter *Aussortiert* zeigt, was der Filter weggelassen hat |
 | **Streamer** | Antippen zum Aufklappen: Empfindlichkeit, Sprache, Layout, Facecam-Größe, **Facecam einzeichnen**, Upload-Ziele |
 | **Accounts** | YouTube/TikTok/Instagram verbinden |
-| **Einstellungen** | Regler Chat ↔ Stream, Empfindlichkeit, Feinregler, Filter + Strenge, Spezial-Momente, Standard-Layout, Chat einblenden, Kategorie-Filter, Hashtags |
+| **Einstellungen** | Regler Chat ↔ Stream, Empfindlichkeit, Feinregler, Filter + Strenge, Lernen, Spezial-Momente + eigene Stichwörter, Standard-Layout, Chat einblenden, TikTok-Langversion, Autopilot, Discord/Telegram, Kategorie-Filter, Hashtags |
 
 **Sprache:** Pro Streamer unter *Sprache*. *Englisch* → englische Untertitel **und** englische Titel, Hooks
 und Hashtags. *Automatisch* → Whisper erkennt die Sprache selbst (Titel-Vorlagen dann deutsch).
+
+**Benachrichtigungen einrichten:** *Discord*: im eigenen Server einen Kanal anlegen → Kanal bearbeiten →
+Integrationen → Webhooks → Neuer Webhook → URL kopieren → in Einstellungen einfügen → „Test-Nachricht senden“.
+*Telegram*: bei @BotFather einen Bot anlegen (Token), dem Bot einmal schreiben, Chat-ID z.B. über @userinfobot.
 
 **Tuning** (Einstellungen): Zu viele Clips von bloßem Chat-Gespamme → Regler Richtung *Stream* und/oder
 Filter-*Strenge* hoch. Zu viele schwache Clips → *Empfindlichkeit* Richtung „Weniger“. Zu wenige → Richtung „Mehr“.

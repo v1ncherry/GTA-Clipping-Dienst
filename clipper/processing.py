@@ -36,6 +36,21 @@ def asked_chat_question(words: list[Word], t0: float, t1: float) -> bool:
     return addressed and ("?" in text or " oder " in text or " or " in text)
 
 
+def long_window(cfg: dict, start: float, end: float, total: float) -> tuple[float, float] | None:
+    """Zeitfenster der TikTok-Langversion (über 61 s): vor allem mehr Vorlauf (Kontext), etwas mehr Reaktion."""
+    r = cfg["render"]
+    if not r.get("tiktok_long", True) or end - start >= 61 or not total:
+        return None
+    target = min(max(float(r.get("long_seconds", 70)), 62.0), 90.0)
+    extra = target - (end - start)
+    ls, le = max(0.0, start - extra * 0.75), min(total, end + extra * 0.25)
+    if le - ls < target:
+        ls = max(0.0, le - target)
+    if le - ls < target:
+        le = min(total, ls + target)
+    return (round(ls, 3), round(le, 3)) if le - ls >= 62 else None
+
+
 def render_options(cfg: dict, clip: dict) -> dict:
     """Layout-Optionen: Standard (Einstellungen/Streamer) + Auswahl am Clip."""
     r = cfg["render"]
@@ -56,6 +71,7 @@ class Processor:
         self.q: queue.Queue = queue.Queue()
         self.threads: list[threading.Thread] = []
         self.current: dict[int, str] = {}
+        self.on_ready = None   # Callback(clip_id, first): Benachrichtigung/Autopilot
 
     def start(self) -> None:
         for i in range(max(1, int(self.cfg.get("workers", 2)))):
@@ -77,6 +93,10 @@ class Processor:
             clip_id, rerender = self.q.get()
             try:
                 self.process(clip_id, rerender)
+                if self.on_ready:
+                    clip = self.db.get_clip(clip_id)
+                    if clip and clip["status"] == "ready":
+                        self.on_ready(clip_id, not rerender)
             except Exception as exc:  # noqa: BLE001
                 log.exception("Clip %s fehlgeschlagen", clip_id)
                 self.db.update_clip(clip_id, status="failed", error=str(exc)[-1500:])
@@ -112,8 +132,9 @@ class Processor:
         if words is None:
             self._step(clip_id, "Transkription")
             pad = 4.0
-            a0 = max(0.0, start - pad)
-            a1 = min(info["duration"] or end + pad, end + pad)
+            lw = long_window(cfg, start, end, info["duration"])
+            a0 = max(0.0, min(start, lw[0] if lw else start) - pad)
+            a1 = min(info["duration"] or end + pad, max(end, lw[1] if lw else end) + pad)
             ws: list[Word] = []
             if info["has_audio"]:
                 wav = work / "audio.wav"
@@ -125,7 +146,11 @@ class Processor:
                 start, end = smart_trim(ws, start, end, cfg["clips"]["min_seconds"], cfg["clips"]["max_seconds"])
             words = [w.to_list() for w in ws]
             transcript = " ".join(w.text for w in ws if start - 0.2 <= w.start <= end)
-            self.db.update_clip(clip_id, words=words, raw_start=start, raw_end=end, transcript=transcript)
+            lw = long_window(cfg, start, end, info["duration"])
+            if lw:
+                lw = smart_trim(ws, lw[0], lw[1], 62, 90)
+            self.db.update_clip(clip_id, words=words, raw_start=start, raw_end=end, transcript=transcript,
+                                long_start=lw[0] if lw else None, long_end=lw[1] if lw else None)
             clip = self.db.get_clip(clip_id)
             bd = clip.get("breakdown") or {}
             q = bd.get("quality") or {}
@@ -150,27 +175,12 @@ class Processor:
                                 caption=texts["caption"], llm_score=texts.get("llm_score"), breakdown=breakdown)
             clip = self.db.get_clip(clip_id)
 
-        # 3) Layout (Facecam + Smart-Crop)
+        # 3) Layout, Untertitel, Rendern
         dur = end - start
-        self._step(clip_id, "Layout")
         opts = render_options(cfg, clip)
-        plan = plan_layout(cfg, src, start, dur, info, streamer.get("facecam"), opts)
-
-        # 4) Untertitel (+ Chat-Overlay)
-        clip_words = [Word(s - start, e - start, t) for s, e, t in (clip.get("words") or []) if e > start and s < end]
-        chat = None
-        if plan.get("chat"):
-            chat = [{**m, "t": m["t"] - start} for m in load_clip_chat(work / "chat.json") if m["t"] <= end]
-        ass = build_ass(clip_words, plan, cfg, dur, hook=clip.get("hook"), credit=credit_line(streamer), chat=chat)
-        ass_path = work / "subs.ass"
-        ass_path.write_text(ass, encoding="utf-8")
-
-        # 5) Rendern
-        self._step(clip_id, f"Rendern ({plan['type']})")
+        plan = self._render_version(cfg, clip, streamer, src, info, work, start, end, opts, streamer.get("facecam"),
+                                    "final")
         out = work / "final.mp4"
-        tmp = work / "final.tmp.mp4"
-        render_clip(cfg, src, start, dur, plan, info, str(ass_path), str(tmp))
-        os.replace(tmp, out)
         peak = (clip.get("breakdown") or {}).get("peak_raw")
         thumb_t = min(dur - 0.5, max(0.5, peak - start)) if isinstance(peak, (int, float)) else dur * 0.3
         thumb = work / "thumb.jpg"
@@ -178,6 +188,43 @@ class Processor:
         self.db.update_clip(clip_id, status="ready", final_path=str(out), thumb_path=str(thumb), duration=round(dur, 2),
                             layout={**{k: v for k, v in plan.items() if k != "x_keys"}, "opts": opts}, error=None)
         log.info("Clip %s fertig: %s (%.0fs, %s)", clip_id, clip.get("title"), dur, plan["type"])
+
+        # 4) TikTok-Langversion (TikTok vergütet nur Videos über 1 Minute)
+        if clip.get("long_start") is not None and cfg["render"].get("tiktok_long", True):
+            ls, le = float(clip["long_start"]), min(float(clip["long_end"]), info["duration"] or float(clip["long_end"]))
+            if le - ls >= 61:
+                try:
+                    # Facecam aus der normalen Fassung übernehmen (spart die Erkennung, gleiches Bild)
+                    fc = "none"
+                    if plan.get("cam"):
+                        cx, cy, cw, ch = plan["cam"]
+                        fc = {"x": cx / info["width"], "y": cy / info["height"],
+                              "w": cw / info["width"], "h": ch / info["height"]}
+                    self._render_version(cfg, clip, streamer, src, info, work, ls, le, opts, fc, "final_long")
+                    self.db.update_clip(clip_id, long_path=str(work / "final_long.mp4"),
+                                        long_duration=round(le - ls, 2))
+                    log.info("Clip %s: TikTok-Version fertig (%.0fs)", clip_id, le - ls)
+                except Exception as exc:  # noqa: BLE001
+                    log.warning("Clip %s: TikTok-Version fehlgeschlagen: %s", clip_id, exc)
+
+    def _render_version(self, cfg: dict, clip: dict, streamer: dict, src: str, info: dict, work: Path, start: float,
+                        end: float, opts: dict, facecam, name: str) -> dict:
+        dur = end - start
+        label = "TikTok-Version" if name != "final" else "Layout"
+        self._step(clip["id"], label)
+        plan = plan_layout(cfg, src, start, dur, info, facecam, opts)
+        clip_words = [Word(s - start, e - start, t) for s, e, t in (clip.get("words") or []) if e > start and s < end]
+        chat = None
+        if plan.get("chat"):
+            chat = [{**m, "t": m["t"] - start} for m in load_clip_chat(work / "chat.json") if m["t"] <= end]
+        ass = build_ass(clip_words, plan, cfg, dur, hook=clip.get("hook"), credit=credit_line(streamer), chat=chat)
+        ass_path = work / f"{name}.ass"
+        ass_path.write_text(ass, encoding="utf-8")
+        self._step(clip["id"], f"Rendern{' TikTok-Version' if name != 'final' else ''} ({plan['type']})")
+        out, tmp = work / f"{name}.mp4", work / f"{name}.tmp.mp4"
+        render_clip(cfg, src, start, dur, plan, info, str(ass_path), str(tmp))
+        os.replace(tmp, out)
+        return plan
 
 
 def discard_clip(db: DB, clip_id: int) -> None:
@@ -189,6 +236,7 @@ def discard_clip(db: DB, clip_id: int) -> None:
         if clip.get("raw_owned"):
             shutil.rmtree(work, ignore_errors=True)
         else:
-            for name in ("final.mp4", "thumb.jpg", "subs.ass", "final.tmp.mp4"):
+            for name in ("final.mp4", "thumb.jpg", "subs.ass", "final.ass", "final.tmp.mp4", "final_long.mp4",
+                         "final_long.ass", "final_long.tmp.mp4"):
                 (work / name).unlink(missing_ok=True)
     db.update_clip(clip_id, status="discarded")

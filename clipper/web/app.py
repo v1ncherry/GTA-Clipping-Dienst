@@ -16,6 +16,7 @@ from fastapi.staticfiles import StaticFiles
 from .. import __version__
 from ..config import data_path, deep_merge, effective_config
 from ..db import DB
+from .. import learn
 from ..platforms import detect_platform
 from ..processing import discard_clip
 from ..uploaders import instagram, tiktok
@@ -110,7 +111,7 @@ def create_app(cfg: dict, db: DB, orchestrator, processor, uploader, started: fl
     # ------------------------------------------------------------------ Streamer
     @app.get("/api/streamers")
     def list_streamers():
-        return db.list_streamers()
+        return [{**s, "learned": learn.last_note(db, s["id"])} for s in db.list_streamers()]
 
     @app.post("/api/streamers")
     def add_streamer(payload: dict = Body(...)):
@@ -206,6 +207,8 @@ def create_app(cfg: dict, db: DB, orchestrator, processor, uploader, started: fl
         stamp = int(Path(c["final_path"]).stat().st_mtime) if c.get("final_path") and Path(c["final_path"]).exists() else 0
         c["video_url"] = f"/media/clip/{c['id']}/final.mp4?v={stamp}" if stamp else None
         c["thumb_url"] = f"/media/clip/{c['id']}/thumb.jpg?v={stamp}" if stamp else None
+        lp = c.pop("long_path", None)
+        c["long_url"] = f"/media/clip/{c['id']}/long.mp4?v={stamp}" if lp and Path(lp).exists() else None
         c["uploads"] = db.list_uploads(c["id"])
         c["step"] = processor.current.get(c["id"])
         for k in ("raw_path", "final_path", "thumb_path", "dir"):
@@ -251,7 +254,20 @@ def create_app(cfg: dict, db: DB, orchestrator, processor, uploader, started: fl
     @app.get("/api/settings")
     def get_settings():
         eff = effective_config(cfg, db)
-        return {key: _pick(eff, key) for key in GLOBAL_SETTINGS}
+        return {key: (bool(_pick(eff, key)) if GLOBAL_SETTINGS[key][0] == "secret" else _pick(eff, key))
+                for key in GLOBAL_SETTINGS}
+
+    @app.post("/api/notify/test")
+    def notify_test():
+        from ..notify import _targets, send_sync
+
+        eff = effective_config(cfg, db)
+        if not _targets(eff):
+            raise HTTPException(400, "Noch kein Discord-Webhook oder Telegram-Bot eingetragen")
+        errors = send_sync(eff, "👋 Test von ClipStream – Benachrichtigungen funktionieren.")
+        if errors:
+            raise HTTPException(400, "; ".join(errors))
+        return {"ok": True}
 
     @app.put("/api/settings")
     def put_settings(payload: dict = Body(...)):
@@ -275,15 +291,19 @@ def create_app(cfg: dict, db: DB, orchestrator, processor, uploader, started: fl
             raise HTTPException(400, str(exc)) from exc
 
     @app.delete("/api/clips/{cid}")
-    def delete_clip(cid: int):
-        _clip(cid)
+    def delete_clip(cid: int, reason: str | None = None):
+        c = _clip(cid)
+        note = None
+        if c["status"] != "filtered":   # Verwerfen = schlechtes Feedback (lernt pro Streamer mit)
+            note = learn.record(cfg, db, c, "bad", reason)
         discard_clip(db, cid)
-        return {"ok": True}
+        return {"ok": True, "learned": note}
 
     @app.get("/media/clip/{cid}/{name}")
     def media(cid: int, name: str):
         c = _clip(cid)
-        path = {"final.mp4": c.get("final_path"), "thumb.jpg": c.get("thumb_path")}.get(name)
+        path = {"final.mp4": c.get("final_path"), "thumb.jpg": c.get("thumb_path"),
+                "long.mp4": c.get("long_path")}.get(name)
         if not path or not Path(path).exists():
             raise HTTPException(404)
         return FileResponse(path, filename=f"clip-{cid}.mp4" if name.endswith(".mp4") else None)
@@ -365,13 +385,25 @@ GLOBAL_SETTINGS = {
     "filters.min_stream_reaction": ("num", 0, 5),
     "filters.question_check": ("bool",),
     "special.enabled": ("bool",),
-    "special.categories": ("choices", ("easteregg", "glitch")),
+    "special.categories": ("choices", ("easteregg", "glitch", "stichwort")),
+    "special.keywords": ("phrases",),
     "special.silence": ("bool",),
     "monitor.only_keywords": ("words",),
     "render.layout": ("choice", LAYOUTS),
     "render.cam_size": ("choice", ("s", "m", "l")),
     "render.chat_overlay": ("bool",),
     "render.hook_text": ("bool",),
+    "render.tiktok_long": ("bool",),
+    "learn.enabled": ("bool",),
+    "autopilot.enabled": ("bool",),
+    "autopilot.min_score": ("num", 70, 100),
+    "notify.discord_webhook": ("secret", "https://"),
+    "notify.telegram_token": ("secret", ""),
+    "notify.telegram_chat_id": ("text",),
+    "notify.min_score": ("num", 0, 100),
+    "notify.on_ready": ("bool",),
+    "notify.on_upload": ("bool",),
+    "notify.public_url": ("text",),
     "clips.max_seconds": ("num", 15, 180),
     "hashtags": ("words",),
 }
@@ -406,6 +438,16 @@ def validate_global_settings(payload: dict) -> dict:
         elif kind == "weights":
             value = {k: min(max(float(v), 0.0), 1.0) for k, v in dict(value).items()
                      if k in ("chat_rate", "chatters", "emotes", "audio", "motion")}
+        elif kind == "secret":   # wird nie zurückgegeben, nur "gesetzt ja/nein"
+            value = str(value or "").strip()
+            if value and spec[1] and not value.startswith(spec[1]):
+                raise ValueError(f"{path}: muss mit {spec[1]} beginnen")
+        elif kind == "text":
+            value = str(value or "").strip()[:300]
+        elif kind == "phrases":   # durch Komma getrennt, Leerzeichen erlaubt ("strip club")
+            if isinstance(value, str):
+                value = value.split(",")
+            value = [str(w).strip().lower() for w in value if str(w).strip()][:50]
         elif kind == "words":
             if isinstance(value, str):
                 value = [w.strip() for w in value.replace(",", " ").split() if w.strip()]

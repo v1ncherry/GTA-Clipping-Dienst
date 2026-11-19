@@ -184,6 +184,8 @@ input[type=range] { accent-color: var(--accent); width: 100%; padding: 0; border
 .bar div { height: 100%; background: var(--accent); border-radius: 3px; }
 .chat-sample { max-height: 160px; overflow: auto; color: var(--text2); margin: 8px 0; }
 .foot-actions { display: flex; gap: 6px; flex-wrap: wrap; border-top: 1px solid var(--line); padding-top: 12px; }
+.discard-why { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-top: -6px; }
+.discard-why span { width: 100%; }
 .back { display: none; }
 
 /* ---------------------------------------------------------------- Streamer */
@@ -199,6 +201,13 @@ input[type=range] { accent-color: var(--accent); width: 100%; padding: 0; border
 .streamer-card .head .who { flex: 1; min-width: 0; }
 .streamer-card .head b { font-size: 15px; }
 .streamer-card .row-item select { min-width: 150px; }
+
+/* Schmales Detailfenster: Player schrumpft mit, Formular bleibt sichtbar */
+.detail-pane { container-type: inline-size; }
+@container (max-width: 780px) {
+  .detail { grid-template-columns: minmax(170px, 40%) minmax(0, 1fr); gap: 20px; padding: 20px; }
+  .detail video, .detail .ph { width: 100%; height: auto; }
+}
 
 /* ---------------------------------------------------------------- Dialog, Toast */
 dialog { border: none; border-radius: 14px; padding: 22px; background: var(--card); color: var(--text); box-shadow: 0 20px 60px rgba(0, 0, 0, .35); max-width: 980px; width: 94vw; }
