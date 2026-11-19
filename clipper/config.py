@@ -49,12 +49,53 @@ DEFAULTS: dict[str, Any] = {
         # Wie viele Sekunden der Chat dem Bild hinterherhinkt (wird bei auto_lag nachjustiert).
         "chat_delay": {"twitch": 4, "youtube": 7, "kick": 5, "local": 1, "vod": 8},
         "auto_lag": True,
-        # Gewichte des kombinierten Scores (Chat + Stream).
+        # Hauptregler: Anteil des Streams (Lautstärke + Bewegung) am Score in Prozent, Rest = Chat.
+        # 0 = nur Chat, 100 = nur Stream-Reaktion.
+        "stream_share": 35,
+        # Feinregler: Gewichte innerhalb der Gruppen Chat (chat_rate, chatters, emotes) und Stream (audio, motion).
         "weights": {"chat_rate": 0.35, "chatters": 0.15, "emotes": 0.25, "audio": 0.15, "motion": 0.10},
         # "Stream-Moment" unabhängig vom Chat (Schreien, Explosionen, Action).
         "solo_weights": {"audio": 0.75, "motion": 0.25},
         "solo_factor": 0.85,
         "clip_request_bonus": 0.6,
+    },
+    # Filter gegen "leere" Chat-Ausbrüche. Aussortierte Momente werden nicht gerendert, sind aber im Dashboard
+    # unter "Aussortiert" sichtbar und lassen sich per Klick doch rendern.
+    "filters": {
+        "enabled": True,
+        # Chat beantwortet eine Frage: viele kurze Antworten (ja/nein/Zahlen/Namen), kaum Emotes/Lachen
+        "max_answer_ratio": 0.45,
+        # Ein Chat-Ausbruch braucht Emotes/Lachen/Schock (Anteil) ODER eine Reaktion im Stream (z-Wert Ton/Bild)
+        "min_hype_ratio": 0.25,
+        "min_stream_reaction": 1.0,
+        # So viele Sekunden nach einem Raid / einer Sub-Geschenkwelle wird nicht geclippt
+        "raid_seconds": 90,
+        # Nach dem Transkribieren: Hat der Streamer kurz vorher den Chat etwas gefragt?
+        "question_check": True,
+        # Aussortierte Rohvideos nach so vielen Stunden löschen
+        "keep_hours": 48,
+    },
+    # Spezial-Momente, die auch ohne großen Hype geclippt werden
+    "special": {
+        "enabled": True,
+        # Chat erwähnt Easter Eggs / Geheimnisse bzw. Glitches / Bugs auffällig oft
+        "categories": ["easteregg", "glitch"],
+        "min_mentions": 4,
+        "min_z": 3.0,
+        # Chat wird plötzlich still/gebannt (Story, Spannung), obwohl er sonst aktiv ist
+        "silence": True,
+        "silence_min_baseline": 8,      # mind. so viele Nachrichten pro 5 s im Normalfall
+        "silence_ratio": 0.25,          # Stille = unter 25 % des normalen Chat-Tempos
+        "silence_seconds": 20,
+        "cooldown_seconds": 90,
+        "max_per_hour": 4,
+    },
+    "chat_filter": {
+        # Bot-Befehle (!giveaway, !vote …) ignorieren; "!clip" zählt weiter als Clip-Ruf
+        "ignore_commands": True,
+        "bots": ["nightbot", "streamelements", "streamlabs", "moobot", "fossabot", "wizebot", "botrixoficial",
+                 "kickbot", "sery_bot", "soundalerts", "pokemoncommunitygame", "streamstickers", "commanderroot",
+                 "botisimo"],
     },
     "clips": {
         "min_seconds": 20,
@@ -84,6 +125,18 @@ DEFAULTS: dict[str, Any] = {
         "fail": {
             "weight": 0.9,
             "tokens": ["L", "LL", "RIP", "F", "Sadge", "bruh", "peinlich", "💀", "😭", "ratio", "unlucky"],
+        },
+        "easteregg": {
+            "weight": 1.0,
+            "tokens": ["easter egg", "eastereg", "easteregg", "easter eggs", "secret", "geheim", "geheimnis",
+                       "referenz", "reference", "anspielung", "lore", "hidden", "versteckt", "wusste ich nicht",
+                       "wie hast du das gefunden", "ufo", "alien", "aliens", "bigfoot", "ghost", "geist"],
+        },
+        "glitch": {
+            "weight": 0.9,
+            "tokens": ["glitch", "glitched", "bug", "buggy", "verbuggt", "gebuggt", "physics", "physik", "tpose",
+                       "t-pose", "durch die wand", "unter die map", "kaputt", "broken", "was macht der",
+                       "was macht die", "npc ai", "rockstar moment"],
         },
         "clip": {
             "weight": 2.0,

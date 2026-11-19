@@ -22,6 +22,17 @@ MOTION_W, MOTION_H = 64, 36
 _WORD_RE = re.compile(r"[\w']+", re.UNICODE)
 _LAUGH_RE = re.compile(r"\b(?:ha){2,}h?\b|\bxd+\b|\blo+l\b|\bhehe+\b|\bjaja+\b", re.IGNORECASE)
 
+# Typische Antworten, wenn der Streamer den Chat etwas fragt ("ja", "nein", "2", "links" …)
+ANSWER_WORDS = {
+    "ja", "jaa", "jaaa", "jo", "joa", "jap", "jep", "jup", "nein", "ne", "nee", "nö", "noe", "nope", "yes", "yeah",
+    "yep", "yup", "no", "nah", "links", "rechts", "left", "right", "beide", "both", "keins", "keiner", "none",
+    "egal", "safe", "sicher", "stimmt", "true", "false", "vielleicht", "maybe", "option", "a", "b", "c", "d",
+}
+DEFAULT_BOTS = {
+    "nightbot", "streamelements", "streamlabs", "moobot", "fossabot", "wizebot", "botrixoficial", "kickbot",
+    "sery_bot", "soundalerts", "pokemoncommunitygame", "streamstickers", "commanderroot", "botisimo",
+}
+
 
 class KeywordMatcher:
     """Ordnet Chat-Nachrichten Kategorien zu (funny/hype/shock/fail/clip)."""
@@ -62,14 +73,31 @@ class KeywordMatcher:
         return self.cats.get(cat, {}).get("weight", 1.0)
 
 
+def is_answer(text: str, hits: list[str]) -> bool:
+    """Sieht die Nachricht wie eine Antwort auf eine Frage aus (kurz, ohne Emotes/Lachen)?"""
+    if hits:
+        return False
+    toks = _WORD_RE.findall(text.lower())
+    if not toks or len(toks) > 3:
+        return False
+    if any(t in ANSWER_WORDS or t.isdigit() for t in toks):
+        return True
+    return len(toks) == 1 and len(toks[0]) <= 14       # einzelnes Wort/Name als Antwort
+
+
 class Timeline:
     """Zeitreihen in 1-Sekunden-Bins auf der Inhalts-Zeitachse (Sekunden seit Session-/Videostart)."""
 
-    def __init__(self, keywords: dict):
+    def __init__(self, keywords: dict, chat_filter: dict | None = None):
         self.matcher = KeywordMatcher(keywords)
         self.categories = [c for c in keywords if c != "clip"]
+        cf = chat_filter or {}
+        self.ignore_commands = bool(cf.get("ignore_commands", True))
+        self.bots = {b.lower() for b in cf.get("bots", DEFAULT_BOTS)}
         self.cap = 4096
-        self.chat = {k: np.zeros(self.cap) for k in ("msgs", "users", "emotesum", "clip", *self.categories)}
+        self.chat = {k: np.zeros(self.cap)
+                     for k in ("msgs", "users", "emotesum", "hypemsgs", "answers", "clip", *self.categories)}
+        self.noise: list[tuple[float, str]] = []      # Raids, Sub-Geschenkwellen …
         self.audio = np.full(self.cap, np.nan)
         self.motion_sum = np.zeros(self.cap)
         self.motion_n = np.zeros(self.cap)
@@ -94,6 +122,16 @@ class Timeline:
     def add_chat(self, t: float, author: str, text: str) -> None:
         if t < 0:
             return
+        if author.lower() in self.bots:
+            return
+        hits = self.matcher.match(text)
+        if self.ignore_commands and text.lstrip().startswith("!"):
+            # Bot-Befehle (!giveaway, !vote, !discord …) zählen nicht als Hype – nur "!clip" als Clip-Ruf
+            if "clip" in hits:
+                with self.lock:
+                    self._ensure(int(t))
+                    self.chat["clip"][int(t)] += 1
+            return
         idx = int(t)
         with self.lock:
             self._ensure(idx)
@@ -105,7 +143,6 @@ class Timeline:
             if len(self._authors) > 64:
                 for key in [k for k in self._authors if k < idx - 30]:
                     del self._authors[key]
-            hits = self.matcher.match(text)
             hype = 0.0
             for cat in hits:
                 if cat == "clip":
@@ -114,8 +151,21 @@ class Timeline:
                     self.chat[cat][idx] += 1
                     hype = max(hype, self.matcher.weight(cat))
             self.chat["emotesum"][idx] += hype
+            if hype > 0:
+                self.chat["hypemsgs"][idx] += 1
+            elif is_answer(text, hits):
+                self.chat["answers"][idx] += 1
             self.messages.append((t, author, text))
             self.chat_until = max(self.chat_until, t)
+
+    def add_noise(self, t: float, kind: str) -> None:
+        """Ereignis, das Chat-Ausbrüche ohne Inhalt auslöst (Raid, Sub-Geschenke)."""
+        with self.lock:
+            self.noise.append((t, kind))
+
+    def noise_between(self, a: float, b: float) -> list[tuple[float, str]]:
+        with self.lock:
+            return [n for n in self.noise if a <= n[0] <= b]
 
     def add_audio(self, t: float, db: float) -> None:
         if t < 0:

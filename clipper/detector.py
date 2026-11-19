@@ -2,6 +2,12 @@
 
 Alle Signale werden gegen die eigene Baseline des Streamers normalisiert (robuster z-Score über die letzten
 Minuten). Dadurch funktioniert die Erkennung bei 500 wie bei 50.000 Zuschauern gleich.
+
+Drei Spuren:
+1. Hype       – Chat + Stream kombiniert (Gewichtung über Regler), danach Qualitätsprüfung gegen leere
+                Chat-Ausbrüche (Antworten auf Fragen, Raids, Spam ohne Reaktion im Stream).
+2. Spezial    – Chat erwähnt auffällig oft Easter Eggs/Geheimnisse oder Glitches/Bugs.
+3. Stille     – sonst aktiver Chat wird plötzlich still (Spannung, Story, alle schauen gebannt zu).
 """
 
 from __future__ import annotations
@@ -15,10 +21,12 @@ import numpy as np
 from .signals import Timeline
 
 SERIES = ("chat_rate", "chatters", "emotes", "audio", "motion")
+CHAT_KEYS = ("chat_rate", "chatters", "emotes")
+STREAM_KEYS = ("audio", "motion")
 
 
 def _floor(name: str, med: float) -> float:
-    if name in ("chat_rate", "chatters", "emotes"):
+    if name in ("chat_rate", "chatters", "emotes", "special"):
         return max(1.0, 0.5 * math.sqrt(max(med, 0) + 1), 0.15 * med)
     if name == "audio":
         return 2.0
@@ -29,16 +37,33 @@ def score_from_raw(raw: float) -> float:
     return 100.0 / (1.0 + math.exp(-(raw - 2.5) / 0.7))
 
 
+def effective_weights(d: dict) -> tuple[dict[str, float], float]:
+    """Hauptregler (stream_share) + Feinregler (weights) -> normierte Gewichte und Faktor der Stream-Solo-Spur."""
+    share = min(max(float(d.get("stream_share", 35)), 0.0), 100.0) / 100.0
+    w = {k: max(0.0, float(v)) for k, v in (d.get("weights") or {}).items()}
+    cw = sum(w.get(k, 0.0) for k in CHAT_KEYS)
+    sw = sum(w.get(k, 0.0) for k in STREAM_KEYS)
+    eff = {k: (1 - share) * (w.get(k, 0.0) / cw if cw else 1 / len(CHAT_KEYS)) for k in CHAT_KEYS}
+    eff.update({k: share * (w.get(k, 0.0) / sw if sw else 1 / len(STREAM_KEYS)) for k in STREAM_KEYS})
+    solo = float(d.get("solo_factor", 0.85)) * min(1.25, share / 0.35)
+    return eff, solo
+
+
 class Detector:
     def __init__(self, timeline: Timeline, cfg: dict, lag: float, on_event: Callable[[dict], None] | None = None):
         self.tl = timeline
         self.d = cfg["detection"]
         self.c = cfg["clips"]
+        self.f = cfg.get("filters") or {}
+        self.sp = cfg.get("special") or {}
+        self.weights, self.solo_factor = effective_weights(self.d)
         self.lag = float(lag)
         self.on_event = on_event
         self.cursor = 0
         self.cap = 4096
-        self.sm = {k: np.full(self.cap, np.nan) for k in SERIES}
+        self.sm = {k: np.full(self.cap, np.nan) for k in (*SERIES, "special")}
+        self.za = np.zeros(self.cap)
+        self.zm = np.zeros(self.cap)
         self.scores = np.zeros(self.cap)
         self.baseline_bins = int(self.d["baseline_minutes"] * 60)
         self.warmup_bins = int(self.d["warmup_minutes"] * 60)
@@ -48,6 +73,10 @@ class Detector:
         self._run_start: int | None = None
         self.last_event_end = -1e9
         self.recent_events: deque = deque()
+        self._special_last = -1e9
+        self._special_recent: deque = deque()
+        self._quiet_start: int | None = None
+        self._quiet_msgs = 0.0
         self.events: list[dict] = []
         self.history: deque = deque(maxlen=1800)
         self.last_parts: dict = {}
@@ -57,9 +86,12 @@ class Detector:
         if idx < self.cap:
             return
         new_cap = max(self.cap * 2, idx + 1024)
-        for k in SERIES:
-            self.sm[k] = np.concatenate([self.sm[k], np.full(new_cap - self.cap, np.nan)])
-        self.scores = np.concatenate([self.scores, np.zeros(new_cap - self.cap)])
+        grow = new_cap - self.cap
+        for k in self.sm:
+            self.sm[k] = np.concatenate([self.sm[k], np.full(grow, np.nan)])
+        self.za = np.concatenate([self.za, np.zeros(grow)])
+        self.zm = np.concatenate([self.zm, np.zeros(grow)])
+        self.scores = np.concatenate([self.scores, np.zeros(grow)])
         self.cap = new_cap
 
     def _raw_values(self, idx: int) -> dict:
@@ -67,18 +99,19 @@ class Detector:
         tl = self.tl
         audio = tl.window("audio", idx - 1, idx + 2)
         motion = tl.window("motion", idx - 1, idx + 2)
+        special = sum(float(tl.window(cat, c - 7, c + 8).sum())
+                      for cat in self.sp.get("categories", []) if cat in tl.chat)
         return {
             "chat_rate": float(tl.window("msgs", c - 2, c + 3).sum()),
             "chatters": float(tl.window("users", c - 2, c + 3).sum()),
             "emotes": float(tl.window("emotesum", c - 2, c + 3).sum()),
             "clip": float(tl.window("clip", c - 2, c + 9).sum()),
+            "special": special,
             "audio": float(np.nanmax(audio)) if np.any(~np.isnan(audio)) else math.nan,
             "motion": float(np.nanmean(motion)) if np.any(~np.isnan(motion)) else math.nan,
         }
 
-    def _z(self, name: str, idx: int, value: float) -> float:
-        if math.isnan(value):
-            return 0.0
+    def _baseline(self, name: str, idx: int) -> tuple[float, float]:
         cached = self._stats.get(name)
         if cached is None or idx - cached[0] >= 5:
             a, b = max(0, idx - self.baseline_bins), max(0, idx - 20)
@@ -91,7 +124,12 @@ class Detector:
                 mad = float(np.median(np.abs(base - med))) * 1.4826
                 self._stats[name] = (idx, med, max(mad, _floor(name, med)))
             cached = self._stats[name]
-        _, med, scale = cached
+        return cached[1], cached[2]
+
+    def _z(self, name: str, idx: int, value: float) -> float:
+        if math.isnan(value):
+            return 0.0
+        med, scale = self._baseline(name, idx)
         if math.isnan(med):
             return 0.0
         return float(np.clip((value - med) / scale, -3.0, 10.0))
@@ -104,16 +142,15 @@ class Detector:
             idx = self.cursor
             self._ensure(idx)
             vals = self._raw_values(idx)
-            for k in SERIES:
+            for k in (*SERIES, "special"):
                 self.sm[k][idx] = vals[k]
             z = {k: self._z(k, idx, vals[k]) for k in SERIES}
-            w = self.d["weights"]
-            wsum = sum(w.values()) or 1.0
-            full = sum(w.get(k, 0) * z[k] for k in SERIES) / wsum
+            self.za[idx], self.zm[idx] = z["audio"], z["motion"]
+            full = sum(self.weights[k] * z[k] for k in SERIES)
             full += self.d["clip_request_bonus"] * min(vals["clip"], 5)
             sw = self.d["solo_weights"]
             swsum = sum(sw.values()) or 1.0
-            solo = self.d["solo_factor"] * (sw.get("audio", 0) * z["audio"] + sw.get("motion", 0) * z["motion"]) / swsum
+            solo = self.solo_factor * (sw.get("audio", 0) * z["audio"] + sw.get("motion", 0) * z["motion"]) / swsum
             raw = max(full, solo)
             score = score_from_raw(raw)
             self.scores[idx] = score
@@ -122,6 +159,9 @@ class Detector:
             self.last_parts = parts
             self.history.append((idx, round(score, 1)))
             self._update(idx, score, parts)
+            if self.sp.get("enabled", True):
+                self._special_mentions(idx, vals, parts)
+                self._silence(idx, vals, parts)
             self.cursor += 1
 
     def _update(self, idx: int, score: float, parts: dict) -> None:
@@ -158,16 +198,131 @@ class Detector:
         start, peak, peak_score = a["start"], a["peak"], a["peak_score"]
         if start < self.last_event_end + self.d["cooldown_seconds"]:
             return
-        while self.recent_events and self.recent_events[0] < peak - 3600:
-            self.recent_events.popleft()
-        if len(self.recent_events) >= self.d["max_clips_per_hour"] and peak_score < self.d["over_limit_score"]:
-            return
+        quality, reason = self.assess(start, end, a["parts"])
+        if reason is None:
+            while self.recent_events and self.recent_events[0] < peak - 3600:
+                self.recent_events.popleft()
+            if len(self.recent_events) >= self.d["max_clips_per_hour"] and peak_score < self.d["over_limit_score"]:
+                return
+            self.recent_events.append(peak)
         self.last_event_end = end
-        self.recent_events.append(peak)
         event = self.build_event(start, end, peak, peak_score, a["parts"], source="auto")
+        event["quality"], event["filtered"] = quality, reason
+        event["breakdown"]["quality"] = quality
+        self._emit(event)
+
+    def _emit(self, event: dict) -> None:
+        event.setdefault("filtered", None)
         self.events.append(event)
         if self.on_event:
             self.on_event(event)
+
+    # ------------------------------------------------------------------ Qualität / Filter
+    def assess(self, start: float, end: float, parts: dict) -> tuple[dict, str | None]:
+        """Ist der Chat-Ausbruch echter Hype – oder z.B. nur Antworten auf eine Frage des Streamers?"""
+        lag = int(round(self.lag))
+        a, b = int(start) + lag - 2, int(end) + lag + 8
+        tl = self.tl
+        msgs = float(tl.window("msgs", a, b).sum())
+        hype_ratio = float(tl.window("hypemsgs", a, b).sum()) / msgs if msgs else 0.0
+        answer_ratio = float(tl.window("answers", a, b).sum()) / msgs if msgs else 0.0
+        clips = float(tl.window("clip", a, b).sum())
+        s0, s1 = max(0, int(start) - 3), min(self.cap, int(end) + 3)
+        reaction = float(max(self.za[s0:s1].max(initial=0.0), 0.8 * self.zm[s0:s1].max(initial=0.0)))
+        raid_window = float(self.f.get("raid_seconds", 90))
+        noise = tl.noise_between(a - raid_window, b)
+        quality = {"hype_ratio": round(hype_ratio, 2), "answer_ratio": round(answer_ratio, 2),
+                   "stream_reaction": round(reaction, 2), "messages": int(msgs), "clip_requests": int(clips),
+                   "raid": bool(noise)}
+        reason = None
+        if self.f.get("enabled", True):
+            min_hype = float(self.f.get("min_hype_ratio", 0.25))
+            if noise:
+                reason = "Raid/Sub-Welle im Chat"
+            elif parts.get("mode") == "chat" and clips < 3:
+                if answer_ratio >= float(self.f.get("max_answer_ratio", 0.45)) and hype_ratio < min_hype \
+                        and reaction < 2.0:
+                    reason = "Chat beantwortet eine Frage"
+                elif hype_ratio < min_hype and reaction < float(self.f.get("min_stream_reaction", 1.0)):
+                    reason = "Chat-Ausbruch ohne Reaktion im Stream"
+        return quality, reason
+
+    # ------------------------------------------------------------------ Spezial-Momente
+    def _special_allowed(self, idx: int) -> bool:
+        if self.active is not None or idx < self.last_event_end + 10:
+            return False
+        if idx - self._special_last < float(self.sp.get("cooldown_seconds", 90)):
+            return False
+        while self._special_recent and self._special_recent[0] < idx - 3600:
+            self._special_recent.popleft()
+        return len(self._special_recent) < int(self.sp.get("max_per_hour", 4))
+
+    def _special_mentions(self, idx: int, vals: dict, parts: dict) -> None:
+        cnt = vals["special"]
+        if cnt < float(self.sp.get("min_mentions", 4)) or not self._special_allowed(idx):
+            return
+        z = self._z("special", idx, cnt)
+        if z < float(self.sp.get("min_z", 3.0)):
+            return
+        lag = int(round(self.lag))
+        c = idx + lag
+        cats = [cat for cat in self.sp.get("categories", []) if cat in self.tl.chat]
+        counts = {cat: float(self.tl.window(cat, c - 7, c + 8).sum()) for cat in cats}
+        category = max(counts, key=counts.get) if counts else "easteregg"
+        # Moment = erste Erwähnung im Chat minus Chat-Verzögerung
+        hits = sum(self.tl.window(cat, c - 7, c + 8) for cat in cats)
+        moment = c - 7 + int(np.argmax(hits > 0)) - lag
+        score = float(np.clip(55 + 8 * z, 55, 95))
+        window = self._fit_window(moment - 25, moment + 12)
+        self._special_last = idx
+        self._special_recent.append(idx)
+        self.last_event_end = max(self.last_event_end, moment + 5)   # kein doppelter Hype-Clip vom selben Moment
+        ev = self.build_event(moment - 10, moment + 5, moment, score, parts, source="special", category=category,
+                              window=window)
+        ev["breakdown"]["special_mentions"] = int(cnt)
+        self._emit(ev)
+
+    def _silence(self, idx: int, vals: dict, parts: dict) -> None:
+        if not self.sp.get("silence", True):
+            return
+        med, _scale = self._baseline("chat_rate", idx)
+        if math.isnan(med) or med < float(self.sp.get("silence_min_baseline", 8)) \
+                or math.isnan(vals["audio"]) or math.isnan(vals["motion"]):
+            self._quiet_start = None          # zu kleiner Chat oder Lücke in der Aufnahme (z.B. Werbepause)
+            return
+        quiet = vals["chat_rate"] <= float(self.sp.get("silence_ratio", 0.25)) * med
+        if quiet:
+            if self._quiet_start is None:
+                self._quiet_start, self._quiet_msgs = idx, 0.0
+            self._quiet_msgs += self.tl.window("msgs", idx + int(round(self.lag)), idx + int(round(self.lag)) + 1).sum()
+            return
+        if self._quiet_start is None:
+            return
+        start, length = self._quiet_start, idx - self._quiet_start
+        self._quiet_start = None
+        # Ganz ohne Nachrichten ist eher der Chat abgerissen als gebannt
+        if length < float(self.sp.get("silence_seconds", 20)) or length > 240 or self._quiet_msgs < 2:
+            return
+        if not self._special_allowed(idx):
+            return
+        self._special_last = idx
+        self._special_recent.append(idx)
+        score = float(np.clip(60 + (length - 20) * 0.8, 60, 90))
+        window = self._fit_window(start - 5, idx + 10, keep_end=True)
+        ev = self.build_event(start, idx, idx, score, parts, source="special", category="spannung", window=window)
+        ev["breakdown"]["silence_seconds"] = int(length)
+        self._emit(ev)
+
+    def _fit_window(self, s: float, e: float, keep_end: bool = False) -> tuple[float, float]:
+        mn, mx = self.c["min_seconds"], self.c["max_seconds"]
+        if e - s > mx:
+            if keep_end:
+                s = e - mx
+            else:
+                e = s + mx
+        if e - s < mn:
+            s -= (mn - (e - s))
+        return round(max(0.0, s), 2), round(e, 2)
 
     # ------------------------------------------------------------------ events
     def clip_window(self, start: float, end: float, peak: float) -> tuple[float, float]:
@@ -186,25 +341,29 @@ class Detector:
             e, s = e - s, 0.0
         return round(s, 2), round(e, 2)
 
-    def build_event(self, start: float, end: float, peak: float, score: float, parts: dict, source: str) -> dict:
+    def build_event(self, start: float, end: float, peak: float, score: float, parts: dict, source: str,
+                    category: str | None = None, window: tuple[float, float] | None = None) -> dict:
         lag = int(round(self.lag))
         a, b = int(start) + lag - 2, int(end) + lag + 8
         cats = {c: float(self.tl.window(c, a, b).sum()) for c in self.tl.categories}
-        if sum(cats.values()) > 0:
-            category = max(cats, key=cats.get)
-        else:
-            category = "action" if parts.get("mode") == "stream" else "hype"
+        if category is None:
+            if sum(cats.values()) > 0:
+                category = max(cats, key=cats.get)
+            else:
+                category = "action" if parts.get("mode") == "stream" else "hype"
         msgs = self.tl.messages_between(a, b)
         counter = Counter(" ".join(m[2].split())[:80] for m in msgs)
-        clip_start, clip_end = self.clip_window(start, end, peak)
+        clip_start, clip_end = window or self.clip_window(start, end, peak)
         return {
             "source": source,
             "start": float(start), "end": float(end), "peak": float(peak),
             "score": round(float(score), 1),
             "category": category,
             "clip_start": clip_start, "clip_end": clip_end,
-            "breakdown": {**parts, "lag": round(self.lag, 1), "categories": cats, "messages": len(msgs)},
+            "breakdown": {**parts, "lag": round(self.lag, 1), "categories": cats, "messages": len(msgs),
+                          "weights": {k: round(v, 3) for k, v in self.weights.items()}},
             "chat_sample": [[t, n] for t, n in counter.most_common(15)],
+            "filtered": None,
         }
 
     def manual_event(self, end: float, seconds: float) -> dict:

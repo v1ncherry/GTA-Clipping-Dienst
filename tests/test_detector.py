@@ -101,3 +101,105 @@ def test_lag_estimation():
     det = Detector(tl, cfg, lag=0)
     lag = det.estimate_lag(1400)
     assert lag is not None and 5 <= lag <= 9
+
+
+# --------------------------------------------------------------------------- intelligentere Erkennung
+
+def _burst(tl, start, seconds, per_sec, texts, seed=11):
+    rng = random.Random(seed)
+    for s in range(start, start + seconds):
+        for _ in range(per_sec):
+            tl.add_chat(s + rng.random(), f"fan{rng.randint(1, 5000)}", rng.choice(texts))
+
+
+def _run(tl, cfg, seconds, lag=5):
+    events = []
+    det = Detector(tl, cfg, lag=lag, on_event=events.append)
+    det.advance(seconds)
+    det.finalize()
+    return events
+
+
+def test_question_answers_are_filtered():
+    cfg = _cfg()
+    tl = Timeline(cfg["keywords"])
+    _fill_baseline(tl, 900)
+    # Streamer fragt "Welches Auto soll ich nehmen?" -> Chat antwortet, keine Reaktion im Ton
+    _burst(tl, 605, 15, 25, ["ja", "nein", "2", "1", "links", "Lambo", "das rote", "ja", "nein"])
+    events = _run(tl, cfg, 900)
+    assert len(events) == 1
+    assert events[0]["filtered"] == "Chat beantwortet eine Frage"
+    assert events[0]["quality"]["answer_ratio"] >= 0.45
+
+
+def test_real_hype_is_not_filtered():
+    cfg = _cfg()
+    tl = Timeline(cfg["keywords"])
+    _fill_baseline(tl, 900)
+    _burst(tl, 605, 15, 25, ["KEKW", "LMAO", "😂😂", "ICANT", "ich kann nicht mehr"])
+    events = _run(tl, cfg, 900)
+    assert len(events) == 1 and events[0]["filtered"] is None
+
+
+def test_raid_burst_is_filtered():
+    cfg = _cfg()
+    tl = Timeline(cfg["keywords"])
+    _fill_baseline(tl, 900)
+    tl.add_noise(603, "raid")
+    _burst(tl, 605, 15, 25, ["KEKW raid", "PogChamp", "🔥🔥", "hallo aus dem raid"])
+    events = _run(tl, cfg, 900)
+    assert len(events) == 1 and events[0]["filtered"] == "Raid/Sub-Welle im Chat"
+
+
+def test_bot_commands_and_bots_are_ignored():
+    cfg = _cfg()
+    tl = Timeline(cfg["keywords"], cfg["chat_filter"])
+    _fill_baseline(tl, 900)
+    _burst(tl, 605, 15, 30, ["!giveaway", "!join", "!vote 2"])
+    for s in range(605, 620):
+        tl.add_chat(s, "Nightbot", "Folgt auf Instagram!")
+    assert _run(tl, cfg, 900) == []
+
+
+def test_easter_egg_mentions_create_special_clip():
+    cfg = _cfg()
+    tl = Timeline(cfg["keywords"])
+    _fill_baseline(tl, 900)
+    _burst(tl, 605, 8, 2, ["easter egg!!", "das ist ein easter egg", "secret entdeckt", "lore referenz"])
+    events = _run(tl, cfg, 900)
+    assert len(events) == 1
+    ev = events[0]
+    assert ev["source"] == "special" and ev["category"] == "easteregg" and ev["filtered"] is None
+    assert ev["clip_start"] < 600 < ev["clip_end"]
+
+
+def test_sudden_silence_creates_tension_clip():
+    cfg = _cfg()
+    tl = Timeline(cfg["keywords"])
+    _fill_baseline(tl, 600, rate=3.0)
+    # Chat wird 30 s fast still (alle schauen gebannt), danach wieder normal
+    rng = random.Random(4)
+    nrng = np.random.default_rng(4)
+    for s in range(600, 900):
+        quiet = 640 <= s < 670
+        n = (1 if s % 6 == 0 else 0) if quiet else nrng.poisson(3.0)
+        for _ in range(n):
+            tl.add_chat(s + rng.random(), f"u{rng.randint(1, 400)}", "hallo")
+        for q in range(4):
+            tl.add_audio(s + q * 0.25, -30 + nrng.normal(0, 2.5))
+        tl.add_motion(s, 0.03)
+    events = _run(tl, cfg, 900)
+    tension = [e for e in events if e["category"] == "spannung"]
+    assert len(tension) == 1
+    assert tension[0]["clip_start"] <= 640 and tension[0]["clip_end"] >= 660
+
+
+def test_stream_share_slider():
+    from clipper.detector import effective_weights
+
+    d = dict(DEFAULTS["detection"])
+    w, solo = effective_weights({**d, "stream_share": 0})
+    assert w["audio"] == 0 and w["motion"] == 0 and solo == 0
+    assert abs(sum(w.values()) - 1) < 1e-9
+    w, solo = effective_weights({**d, "stream_share": 100})
+    assert w["chat_rate"] == 0 and abs(w["audio"] + w["motion"] - 1) < 1e-9 and solo > 0.85
