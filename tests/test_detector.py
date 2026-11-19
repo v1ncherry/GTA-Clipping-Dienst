@@ -203,3 +203,45 @@ def test_stream_share_slider():
     assert abs(sum(w.values()) - 1) < 1e-9
     w, solo = effective_weights({**d, "stream_share": 100})
     assert w["chat_rate"] == 0 and abs(w["audio"] + w["motion"] - 1) < 1e-9 and solo > 0.85
+
+
+def _loud_moment(tl, at, seconds=6):
+    for s in range(at, at + seconds):
+        for q in range(4):
+            tl.add_audio(s + q * 0.25, 0)
+        tl.add_motion(s, 0.25)
+
+
+def test_loud_alert_while_streamer_sleeps_is_filtered():
+    cfg = _cfg()
+    tl = Timeline(cfg["keywords"])
+    _fill_baseline(tl, 900, rate=0.5)
+    # Streamer schläft: der Chat schreibt immer wieder "wake up" – dann liest die TTS laut eine Spende vor
+    for i, s in enumerate(range(400, 505, 15)):
+        tl.add_chat(s + 0.5, f"sleepy{i}", ["wake up bro", "is he asleep", "LET HIM SLEEP", "schläft er?"][i % 4])
+    _loud_moment(tl, 500)
+    events = _run(tl, cfg, 900)
+    assert len(events) == 1
+    assert events[0]["filtered"] == "Streamer schläft / ist AFK"
+    assert events[0]["quality"]["sleep_msgs"] >= 3
+
+
+def test_loud_moment_while_awake_is_kept():
+    cfg = _cfg()
+    tl = Timeline(cfg["keywords"])
+    _fill_baseline(tl, 900, rate=0.5)
+    tl.add_chat(450.5, "einer", "wake up samurai")    # ein einzelner Meme-Spruch reicht nicht
+    _loud_moment(tl, 500)
+    events = _run(tl, cfg, 900)
+    assert len(events) == 1 and events[0]["filtered"] is None
+
+
+def test_sleep_check_can_be_switched_off():
+    cfg = deep_merge(DEFAULTS, {"filters": {"sleep_check": False}})
+    tl = Timeline(cfg["keywords"])
+    _fill_baseline(tl, 900, rate=0.5)
+    for i, s in enumerate(range(400, 505, 15)):
+        tl.add_chat(s + 0.5, f"sleepy{i}", "wake up")
+    _loud_moment(tl, 500)
+    events = _run(tl, cfg, 900)
+    assert len(events) == 1 and events[0]["filtered"] is None

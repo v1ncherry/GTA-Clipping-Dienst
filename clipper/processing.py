@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import os
 import queue
+import re
 import shutil
 import threading
 from pathlib import Path
@@ -25,6 +26,24 @@ log = logging.getLogger("clipper.processing")
 QUESTION_PHRASES = ("chat", "was meint ihr", "was denkt ihr", "soll ich", "sollen wir", "wer von euch", "schreibt",
                     "ja oder nein", "votet", "abstimm", "welche", "welcher", "welches", "wie viele", "kennt ihr",
                     "what do you think", "should i", "should we", "who of you", "type in", "yes or no", "which one")
+
+
+# Vorgelesene Spenden-/Alert-Ansagen (TTS): "X tipped $1 through Super Chat", "Y cheered 500 bits", "Z hat 5 € gespendet"
+ALERT_RE = re.compile(
+    r"\b(?:tipped|donated|cheered|gifted|resubscribed|subscribed)\b|\bsuper\s*(?:chat|sticker)s?\b"
+    r"|\b\d+\s*bits\b|\bbits?\s+(?:donation|cheer)\b|\bdonation\b|\btts\b|\btext\s*to\s*speech\b"
+    r"|\b(?:hat|haben)\b.{0,40}\b(?:gespendet|gecheert|gesubbt|verschenkt|abonniert)\b|\bspende\b",
+    re.IGNORECASE)
+
+
+def alert_only(words: list[Word], t0: float, t1: float, max_other_words: int = 12) -> bool:
+    """Ist zwischen t0 und t1 nur eine vorgelesene Spende/Alert zu hören – ohne echte Reaktion des Streamers?"""
+    text = " ".join(w.text for w in words if t0 <= w.start <= t1).strip()
+    if not text or not ALERT_RE.search(text):
+        return False
+    sentences = [s for s in re.split(r"(?<=[.!?])\s+", text) if s.strip()]
+    other = sum(len(s.split()) for s in sentences if not ALERT_RE.search(s))
+    return other <= max_other_words
 
 
 def asked_chat_question(words: list[Word], t0: float, t1: float) -> bool:
@@ -163,6 +182,17 @@ class Processor:
                 log.info("Clip %s aussortiert: %s", clip_id, reason)
                 self.db.update_clip(clip_id, status="filtered", filter_reason=reason)
                 return
+            ev_start = bd.get("event_start_raw")
+            ev_peak = bd.get("peak_raw")
+            if (cfg["filters"].get("enabled", True) and cfg["filters"].get("alert_check", True)
+                    and clip["source"] in ("auto", "vod", "special") and not clip.get("forced")
+                    and q.get("clip_requests", 0) < 3 and isinstance(ev_start, (int, float))):
+                t1 = max(ev_start + 10, (ev_peak if isinstance(ev_peak, (int, float)) else ev_start) + 6)
+                if alert_only(ws, ev_start - 3, t1, int(cfg["filters"].get("alert_max_other_words", 12))):
+                    reason = "Nur eine vorgelesene Spende / TTS-Ansage"
+                    log.info("Clip %s aussortiert: %s", clip_id, reason)
+                    self.db.update_clip(clip_id, status="filtered", filter_reason=reason)
+                    return
 
         # 2) Titel, Hook, Hashtags
         if not clip.get("title"):

@@ -474,3 +474,50 @@ def test_llm_unreachable_falls_back_to_templates():
                    {"id": 1, "category": "funny"})
     assert t["title"] and t["llm_score"] is None
     llm._cache["t"] = 0
+
+
+def test_sleep_messages_in_chat():
+    from clipper.signals import is_sleep_message
+
+    for t in ["wake up broo", "IS HE AWAKE", "MAN LET THE NGA SLEEP", "schläft er?", "zzzz", "afk?", "Wach auf!"]:
+        assert is_sleep_message(t), t
+    for t in ["HES STILL GOING???", "KEKW", "sleeping dogs remaster", "what a move", "awake"]:
+        assert not is_sleep_message(t), t
+
+
+def _words(text, t0=10.0):
+    return [Word(t0 + i * 0.4, t0 + i * 0.4 + 0.3, w) for i, w in enumerate(text.split())]
+
+
+def test_tts_alert_only_is_detected():
+    from clipper.processing import alert_only
+
+    assert alert_only(_words("At user DT7BZ7VD3R tipped $1 through Super Chat. At"), 9, 30)
+    assert alert_only(_words("Max hat 5 Euro gespendet: Mach mal den Stripclub."), 9, 30)
+    assert alert_only(_words("Gamer99 cheered 500 bits"), 9, 30)
+    # Streamer reagiert selbst ausführlich auf die Spende -> bleibt drin
+    assert not alert_only(_words("Gamer99 tipped $50 through Super Chat. Yo what?! Bro fifty dollars, chat you "
+                                 "guys are crazy, I can't believe this, thank you so much bro let's go!"), 9, 60)
+    # Keine Ansage
+    assert not alert_only(_words("Oh mein Gott er fährt direkt in den Pool"), 9, 30)
+
+
+def test_llm_gets_sleep_hint_and_strict_rules(tmp_path):
+    from clipper import llm
+    from clipper.texts import SYSTEM_PROMPT, make_texts
+    from fake_ollama import FakeOllama
+
+    assert "schläft" in SYSTEM_PROMPT and "Super Chat" in SYSTEM_PROMPT
+    fake = FakeOllama(models=["qwen2.5:7b-instruct"], score=2)
+    try:
+        cfg = deep_merge(DEFAULTS, {"llm": {"url": fake.url}})
+        llm._cache["t"] = 0
+        make_texts(cfg, {"name": "S", "url": "https://www.twitch.tv/s", "platform": "twitch"},
+                   {"id": 1, "category": "shock", "transcript": "At user X tipped $1 through Super Chat.",
+                    "chat_sample": [["wake up", 3]],
+                    "breakdown": {"mode": "stream", "quality": {"sleep_msgs": 5}}})
+        body = str(fake.requests[-1])
+        assert "5 Chat-Nachrichten" in body and "nur durch Lautstärke" in body
+    finally:
+        fake.close()
+        llm._cache["t"] = 0

@@ -28,6 +28,21 @@ ANSWER_WORDS = {
     "yep", "yup", "no", "nah", "links", "rechts", "left", "right", "beide", "both", "keins", "keiner", "none",
     "egal", "safe", "sicher", "stimmt", "true", "false", "vielleicht", "maybe", "option", "a", "b", "c", "d",
 }
+# Chat merkt an, dass der Streamer schläft oder weg ist ("wake up", "is he asleep", "schläft er?", "afk" …)
+SLEEP_RE = re.compile(
+    r"\bwake\s*(?:up|him|her)\b|\bwakey\b|\bfell\s+asleep\b|\bsleep\s*stream\b|\bafk\b|\bz{3,}\b|residentsleeper"
+    r"|\b(?:is|are|he'?s|she'?s|hes|shes|he|she)\s+(?:he\s+|she\s+|bro\s+|u\s+|you\s+)?(?:still\s+)?"
+    r"(?:asleep|sleeping|awake)\b"
+    r"|\blet\s+(?:him|her|the\s+\w+|bro)\s+sleep\b"
+    r"|\bschl(?:ä|ae)ft\b|\beingeschlafen\b|\bpennt\b|\bwach\s+(?:endlich\s+)?auf\b|\baufwachen\b"
+    r"|\bist\s+(?:er|sie)\s+(?:noch\s+)?(?:wach|weg)\b",
+    re.IGNORECASE)
+
+
+def is_sleep_message(text: str) -> bool:
+    return bool(SLEEP_RE.search(text))
+
+
 DEFAULT_BOTS = {
     "nightbot", "streamelements", "streamlabs", "moobot", "fossabot", "wizebot", "botrixoficial", "kickbot",
     "sery_bot", "soundalerts", "pokemoncommunitygame", "streamstickers", "commanderroot", "botisimo",
@@ -96,7 +111,7 @@ class Timeline:
         self.bots = {b.lower() for b in cf.get("bots", DEFAULT_BOTS)}
         self.cap = 4096
         self.chat = {k: np.zeros(self.cap)
-                     for k in ("msgs", "users", "emotesum", "hypemsgs", "answers", "clip", *self.categories)}
+                     for k in ("msgs", "users", "emotesum", "hypemsgs", "answers", "sleep", "clip", *self.categories)}
         self.noise: list[tuple[float, str]] = []      # Raids, Sub-Geschenkwellen …
         self.audio = np.full(self.cap, np.nan)
         self.motion_sum = np.zeros(self.cap)
@@ -163,6 +178,8 @@ class Timeline:
                 self.chat["hypemsgs"][idx] += 1
             elif is_answer(text, hits):
                 self.chat["answers"][idx] += 1
+            if is_sleep_message(text):
+                self.chat["sleep"][idx] += 1
             self.messages.append((t, author, text, color))
             self.chat_until = max(self.chat_until, t)
 
