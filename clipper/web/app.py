@@ -257,6 +257,37 @@ def create_app(cfg: dict, db: DB, orchestrator, processor, uploader, started: fl
         return {key: (bool(_pick(eff, key)) if GLOBAL_SETTINGS[key][0] == "secret" else _pick(eff, key))
                 for key in GLOBAL_SETTINGS}
 
+    @app.get("/api/llm/status")
+    def llm_status():
+        from .. import llm
+
+        return llm.status(effective_config(cfg, db))
+
+    @app.post("/api/llm/pull")
+    def llm_pull(payload: dict = Body(default={})):
+        from .. import llm
+
+        eff = effective_config(cfg, db)
+        if llm.list_models(eff, max_age=0) is None:
+            raise HTTPException(400, f"Ollama läuft nicht unter {llm.base_url(eff)} – Ollama starten und neu versuchen")
+        model = str(payload.get("model") or llm.RECOMMENDED).strip()
+        return llm.start_pull(eff, model)
+
+    @app.post("/api/llm/test")
+    def llm_test():
+        from .. import llm
+        from ..texts import llm_texts
+
+        eff = effective_config(cfg, db)
+        if not llm.active_model(eff):
+            raise HTTPException(400, "Kein KI-Modell verfügbar – Ollama starten bzw. Modell laden")
+        res = llm_texts(eff, {"name": "Teststreamer"}, "funny",
+                        "Alter was macht der Typ da? Nein nein nein! Er fährt mit dem Auto direkt in den Pool!",
+                        [["KEKW", 120], ["LMAO", 60], ["clip it", 25]], "Erster Tag in der neuen Stadt")
+        if not res:
+            raise HTTPException(400, "Die KI hat nicht geantwortet – Details in data/logs/clipper.log")
+        return res
+
     @app.post("/api/notify/test")
     def notify_test():
         from ..notify import _targets, send_sync
@@ -397,6 +428,11 @@ GLOBAL_SETTINGS = {
     "learn.enabled": ("bool",),
     "autopilot.enabled": ("bool",),
     "autopilot.min_score": ("num", 70, 100),
+    "autopilot.min_llm_score": ("num", 0, 10),
+    "llm.mode": ("choice", ("auto", "on", "off")),
+    "llm.url": ("text",),
+    "llm.model": ("text",),
+    "llm.min_score": ("num", 0, 10),
     "notify.discord_webhook": ("secret", "https://"),
     "notify.telegram_token": ("secret", ""),
     "notify.telegram_chat_id": ("text",),

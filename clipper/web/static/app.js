@@ -317,6 +317,7 @@ function renderDetail() {
             ${bd.clip_requests ? ` · ${bd.clip_requests}× „Clip“ im Chat` : ""}${bd.special_mentions ? ` · ${bd.special_mentions} Erwähnungen` : ""}${bd.silence_seconds ? ` · ${bd.silence_seconds} Sek. Stille` : ""}
             ${bd.vod_time ? ` · VOD-Zeit ${Math.floor(bd.vod_time / 60)}:${String(bd.vod_time % 60).padStart(2, "0")}` : ""}</p>
           ${(c.chat_sample || []).length ? `<div class="chat-sample">${c.chat_sample.map(([t, n]) => `<div>${n}× ${esc(t)}</div>`).join("")}</div>` : ""}
+          ${bd.llm_reason ? `<p><b>KI ${c.llm_score ?? "–"}/10:</b> ${esc(bd.llm_reason)}</p>` : ""}
           ${c.transcript ? `<p>${esc(c.transcript)}</p>` : ""}
         </details>
         <div class="foot-actions">
@@ -605,6 +606,59 @@ async function loadSettings() {
   renderSettings();
 }
 
+/* KI (Ollama): wird automatisch gefunden; Modell per Klick laden */
+let llmTimer = null;
+async function renderLlm() {
+  const box = $("#llm-box");
+  if (!box) return;
+  clearTimeout(llmTimer);
+  let st;
+  try { st = await api("GET", "/api/llm/status"); } catch (e) { box.innerHTML = `<div class="row-item">${esc(e.message)}</div>`; return; }
+  const s = state.settings || {};
+  const pulling = st.pull && !st.pull.done;
+  const pct = st.pull && st.pull.total ? Math.round((st.pull.completed / st.pull.total) * 100) : 0;
+  let head;
+  if (st.mode === "off") head = `<span class="dot"></span><div class="lbl"><b>Ausgeschaltet</b><small>Titel kommen aus Vorlagen</small></div>`;
+  else if (st.active) head = `<span class="dot green"></span><div class="lbl"><b>Verbunden – ${esc(st.active)}</b><small>Schreibt Titel, Hook und Hashtags und bewertet jeden Moment</small></div>`;
+  else if (st.reachable) head = `<span class="dot orange"></span><div class="lbl"><b>Ollama läuft, aber es ist noch kein Modell installiert</b><small>Einmal das empfohlene Modell laden (${esc(st.recommended_size)})</small></div>`;
+  else head = `<span class="dot"></span><div class="lbl"><b>Ollama nicht gefunden</b><small>Unter ${esc(st.url)} antwortet nichts. Ollama starten (läuft nach der Installation im Hintergrund) – bis dahin gibt es Titel aus Vorlagen.</small></div>`;
+  const needsModel = st.reachable && !st.models.some((m) => m.startsWith(st.recommended.split(":")[0]));
+  box.innerHTML = `
+    <div class="row-item">${head}</div>
+    <div class="row-item"><div class="lbl"><b>Modus</b><small>Automatisch = benutzen, sobald Ollama läuft</small></div>
+      <div class="seg" data-llm="mode">${[["auto", "Automatisch"], ["on", "An"], ["off", "Aus"]].map(([v, l]) => `<button type="button" data-v="${v}" class="${st.mode === v ? "on" : ""}">${l}</button>`).join("")}</div></div>
+    ${st.models.length > 1 ? `<div class="row-item"><div class="lbl"><b>Modell</b></div>
+      <select data-llm="model">${st.models.map((m) => `<option ${m === st.active ? "selected" : ""}>${esc(m)}</option>`).join("")}</select></div>` : ""}
+    ${needsModel || pulling ? `<div class="row-item col"><div class="row-main" style="justify-content:space-between"><div class="lbl"><b>Empfohlenes Modell: ${esc(st.recommended)}</b><small>Gutes Deutsch, ${esc(st.recommended_size)} Download, läuft auf der Grafikkarte oder der CPU</small></div>
+      <button class="btn primary" data-llm="pull" ${pulling ? "disabled" : ""}>${pulling ? "Lädt …" : "Laden"}</button></div>
+      ${pulling ? `<div class="bar" style="height:8px"><div style="width:${pct}%"></div></div><small class="muted">${esc(st.pull.status || "")} ${pct ? `· ${pct} %` : ""}</small>` : ""}
+      ${st.pull && st.pull.error ? `<small style="color:var(--red)">${esc(st.pull.error)}</small>` : ""}</div>` : ""}
+    <div class="row-item"><div class="lbl"><b>Schwache Momente aussortieren</b><small>Wenn die KI einen Moment schlechter als diese Note (von 10) bewertet. 0 = aus</small></div>
+      <input type="number" min="0" max="10" style="width:80px" data-llm="min_score" value="${s["llm.min_score"] ?? 3}"></div>
+    <div class="row-item col"><div class="lbl"><b>Adresse</b><small>Nur ändern, wenn Ollama auf einem anderen Rechner läuft (z.B. dem Mac: http://192.168.…:11434)</small></div>
+      <input data-llm="url" value="${esc(st.url)}"></div>
+    <div class="row-item"><div class="lbl" id="llm-test-out"><small class="muted">Erzeugt einen Beispiel-Titel</small></div>
+      <button class="btn" data-llm="test" ${st.active ? "" : "disabled"}>KI testen</button></div>`;
+  const q = (k) => box.querySelector(`[data-llm="${k}"]`);
+  $$('[data-llm="mode"] button', box).forEach((b) => b.addEventListener("click", async () => { await putSettings({ "llm.mode": b.dataset.v }); renderLlm(); }));
+  q("model")?.addEventListener("change", async (e) => { await putSettings({ "llm.model": e.target.value }); renderLlm(); });
+  q("min_score").addEventListener("change", (e) => putSettings({ "llm.min_score": +e.target.value }));
+  q("url").addEventListener("change", async (e) => { await putSettings({ "llm.url": e.target.value.trim() }); renderLlm(); });
+  q("pull")?.addEventListener("click", async () => {
+    try { await api("POST", "/api/llm/pull", {}); toast("Modell wird geladen – das dauert ein paar Minuten"); renderLlm(); } catch (e) { toast(e.message, true); }
+  });
+  q("test")?.addEventListener("click", async (e) => {
+    e.target.disabled = true;
+    $("#llm-test-out").innerHTML = `<small class="muted"><span class="spinner"></span> KI denkt nach … (beim ersten Mal bis zu einer Minute)</small>`;
+    try {
+      const r = await api("POST", "/api/llm/test");
+      $("#llm-test-out").innerHTML = `<b>${esc(r.title || "")}</b><small>Hook: ${esc(r.hook || "–")} · Bewertung ${r.score ?? "–"}/10${r.reason ? ` · ${esc(r.reason)}` : ""}</small>`;
+    } catch (err) { $("#llm-test-out").innerHTML = `<small style="color:var(--red)">${esc(err.message)}</small>`; }
+    e.target.disabled = false;
+  });
+  if (pulling && state.view === "settings") llmTimer = setTimeout(renderLlm, 1500);
+}
+
 async function putSettings(patch, msg = "Gespeichert") {
   try { state.settings = await api("PUT", "/api/settings", patch); toast(msg); } catch (e) { toast(e.message, true); }
 }
@@ -664,11 +718,16 @@ function renderSettings() {
         <input type="number" min="15" max="180" style="width:80px" data-n="clips.max_seconds" value="${s["clips.max_seconds"] ?? 60}"></div>
     </div>
 
+    <h3 class="group-title">KI für Titel & Bewertung (Ollama)</h3>
+    <div class="group" id="llm-box"><div class="row-item"><span class="spinner"></span><span class="muted">Suche Ollama …</span></div></div>
+
     <h3 class="group-title">Autopilot & Benachrichtigungen</h3>
     <div class="group">
       <div class="row-item"><div class="lbl"><b>Starke Clips automatisch hochladen</b><small>Auf die Standard-Upload-Ziele des Streamers (sonst alle Accounts). Manuelle und „trotzdem gerenderte“ Clips nie.</small></div>${sw("autopilot.enabled", s["autopilot.enabled"])}</div>
       <div class="row-item col"><div class="lbl"><b>Ab Score</b><small id="ap-label">${s["autopilot.min_score"] ?? 95}</small></div>
         <div class="slider-row"><span>80</span><input type="range" min="80" max="100" data-r="autopilot" value="${s["autopilot.min_score"] ?? 95}"><span>100</span></div></div>
+      <div class="row-item"><div class="lbl"><b>Und KI-Bewertung mindestens</b><small>von 10 – gilt nur, wenn die KI läuft (0 = egal)</small></div>
+        <input type="number" min="0" max="10" style="width:80px" data-n="autopilot.min_llm_score" value="${s["autopilot.min_llm_score"] ?? 6}"></div>
       <div class="row-item col"><div class="lbl"><b>Discord</b><small>Webhook-Adresse: Discord-Kanal → Bearbeiten → Integrationen → Webhooks → Neuer Webhook → URL kopieren</small></div>
         <div class="inline"><input type="password" data-sec="notify.discord_webhook" placeholder="${s["notify.discord_webhook"] ? "gesetzt ✓ – neu eintragen zum Ändern" : "https://discord.com/api/webhooks/…"}">
           ${s["notify.discord_webhook"] ? `<button class="btn plain danger" data-clear="notify.discord_webhook">Entfernen</button>` : ""}</div></div>
@@ -727,6 +786,7 @@ function renderSettings() {
     $$("button", b.parentElement).forEach((x) => x.classList.toggle("on", x === b));
     putSettings({ [b.parentElement.dataset.g]: b.dataset.v });
   }));
+  renderLlm();
 }
 
 /* ================================================================== Start */

@@ -215,9 +215,13 @@ Kategorie (lustig/Hype/Schock/Fail/Action) bestimmt Titel-Vorlage und Hashtags.
 Alle Gewichte, Emote-Listen und Schwellen stehen in `clipper/config.py` und können in `config.yaml`
 überschrieben werden.
 
-**Optional: lokales LLM** (kostenlos) für bessere Titel und eine zweite Bewertung („KI 8/10“):
-[Ollama](https://ollama.com) installieren, `ollama pull qwen2.5:7b-instruct`, in `config.yaml`
-`llm.enabled: true`. Läuft auf dem Mac sehr gut, auf der Radeon über ROCm/Vulkan.
+**KI für Titel & Bewertung (Ollama, kostenlos):** Ist [Ollama](https://ollama.com) installiert und gestartet,
+verbindet sich ClipStream automatisch. Unter *Einstellungen → KI* steht der Status; fehlt noch ein Modell,
+lädt ein Klick auf **Laden** das empfohlene (`qwen2.5:7b-instruct`, 4,7 GB). Ist ein anderes Modell installiert,
+wird das benutzt. Die KI schreibt Titel, Hook und Hashtags und bewertet jeden Moment (1–10): Momente unter 3
+werden aussortiert, der Autopilot lädt nur ab KI-Note 6 hoch (beides einstellbar). Mit **KI testen** siehst du
+sofort einen Beispiel-Titel. Läuft Ollama auf dem Mac statt auf dem PC: dort `OLLAMA_HOST=0.0.0.0` setzen
+und unter *Adresse* `http://<Mac-IP>:11434` eintragen. Ohne Ollama gibt es Titel aus Vorlagen.
 
 ---
 

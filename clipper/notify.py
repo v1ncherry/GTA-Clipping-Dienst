@@ -70,7 +70,8 @@ class Autopilot:
         a, n = cfg.get("autopilot") or {}, cfg.get("notify") or {}
         score = float(clip.get("score") or 0)
         auto = False
-        if (a.get("enabled") and score >= float(a.get("min_score", 95)) and clip["source"] != "manual"
+        llm_ok = clip.get("llm_score") is None or float(clip["llm_score"]) >= float(a.get("min_llm_score", 0) or 0)
+        if (a.get("enabled") and score >= float(a.get("min_score", 95)) and llm_ok and clip["source"] != "manual"
                 and not clip.get("forced") and not self.db.list_uploads(clip_id)):
             ids = streamer.get("upload_targets") or [acc["id"] for acc in self.db.list_accounts()]
             if ids:

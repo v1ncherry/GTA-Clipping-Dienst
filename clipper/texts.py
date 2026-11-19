@@ -2,12 +2,10 @@
 
 from __future__ import annotations
 
-import json
 import logging
 import random
 import re
 
-import requests
 
 from .util import slugify
 
@@ -129,25 +127,21 @@ Antworte NUR mit JSON in genau diesem Format:
 
 
 def llm_texts(cfg: dict, streamer: dict, category: str, transcript: str, chat_sample: list, stream_title: str) -> dict | None:
-    llm = cfg["llm"]
-    if not llm.get("enabled"):
+    from . import llm as llm_mod
+
+    model = llm_mod.active_model(cfg)
+    if not model:
         return None
     chat = "\n".join(f"{n}x {t}" for t, n in (chat_sample or [])[:12])
     user = (f"Streamer: {streamer.get('name')}\nStream-Titel: {stream_title or '-'}\nErkannte Stimmung: {category}\n\n"
             f"Transkript:\n{(transcript or '(kein Text)')[:1800]}\n\nChat in dem Moment:\n{chat or '(kein Chat)'}")
+    system = SYSTEM_PROMPT.replace("<SPRACHE>", "Englisch" if text_language(cfg) == "en" else "Deutsch")
     try:
-        resp = requests.post(llm["url"].rstrip("/") + "/api/chat", timeout=llm.get("timeout", 120), json={
-            "model": llm["model"], "stream": False, "format": "json", "options": {"temperature": 0.7},
-            "messages": [{"role": "system", "content": SYSTEM_PROMPT.replace(
-                "<SPRACHE>", "Englisch" if text_language(cfg) == "en" else "Deutsch")},
-                {"role": "user", "content": user}],
-        })
-        resp.raise_for_status()
-        data = json.loads(resp.json()["message"]["content"])
+        data = llm_mod.chat_json(cfg, model, system, user)
     except Exception as exc:  # noqa: BLE001
-        log.warning("Ollama nicht erreichbar oder Antwort ungültig (%s) – nutze Vorlagen", exc)
+        log.warning("Ollama (%s) hat nicht geantwortet (%s) – nutze Vorlagen", model, exc)
         return None
-    out = {}
+    out = {"model": model}
     if isinstance(data.get("title"), str) and data["title"].strip():
         out["title"] = data["title"].strip()[:95]
     if isinstance(data.get("hook"), str) and data["hook"].strip():

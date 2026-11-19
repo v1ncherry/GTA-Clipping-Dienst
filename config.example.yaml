@@ -65,10 +65,11 @@ render:
     highlight: "#FFE600"
     uppercase: true
 
-llm:                    # optional: lokales LLM für bessere Titel + KI-Bewertung (kostenlos, Ollama)
-  enabled: false
+llm:                    # lokales LLM für bessere Titel + KI-Bewertung (kostenlos, Ollama)
+  mode: auto            # auto = benutzen, sobald Ollama läuft | on | off
   url: http://localhost:11434
   model: qwen2.5:7b-instruct
+  min_score: 3          # Momente, die die KI schlechter bewertet (1-10), werden aussortiert (0 = aus)
 
 hashtags: ["#gaming", "#clips"]   # z.B. ["#gta6", "#gaming"]
 

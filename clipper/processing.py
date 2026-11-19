@@ -174,6 +174,16 @@ class Processor:
             self.db.update_clip(clip_id, title=texts["title"], hook=texts["hook"], hashtags=texts["hashtags"],
                                 caption=texts["caption"], llm_score=texts.get("llm_score"), breakdown=breakdown)
             clip = self.db.get_clip(clip_id)
+            min_llm = float(cfg["llm"].get("min_score") or 0)
+            score = texts.get("llm_score")
+            if (min_llm and score is not None and score < min_llm and cfg["filters"].get("enabled", True)
+                    and clip["source"] in ("auto", "vod", "special") and not clip.get("forced")):
+                reason = f"KI fand den Moment schwach ({score:.0f}/10)"
+                if texts.get("llm_reason"):
+                    reason += f": {texts['llm_reason']}"
+                log.info("Clip %s aussortiert: %s", clip_id, reason)
+                self.db.update_clip(clip_id, status="filtered", filter_reason=reason[:300])
+                return
 
         # 3) Layout, Untertitel, Rendern
         dur = end - start

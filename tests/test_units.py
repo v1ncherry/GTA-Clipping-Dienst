@@ -417,3 +417,60 @@ def test_notifications_and_autopilot(tmp_path, monkeypatch):
     assert any("automatisch hochgeladen" in t and "Krass" in t for t in texts)
     assert any("Naja" in t for t in texts) and len(texts) == 2
     srv.shutdown()
+
+
+def test_ollama_autodetect_and_pull():
+    import time as _time
+
+    from clipper import llm
+    from fake_ollama import FakeOllama
+
+    fake = FakeOllama(models=["nomic-embed-text:latest", "llama3.1:8b"])
+    try:
+        cfg = deep_merge(DEFAULTS, {"llm": {"url": fake.url}})
+        llm._cache["t"] = 0
+        assert llm.mode(cfg) == "auto"
+        assert llm.mode(deep_merge(DEFAULTS, {"llm": {"enabled": False, "mode": None}})) == "auto"  # alte config.yaml
+        assert llm.active_model(cfg) == "llama3.1:8b"            # gewünschtes fehlt -> bevorzugtes installiertes
+        assert llm.active_model(deep_merge(cfg, {"llm": {"mode": "off"}})) is None
+        llm.start_pull(cfg, "qwen2.5:7b-instruct")
+        for _ in range(50):
+            if llm.pull_status()["done"]:
+                break
+            _time.sleep(0.05)
+        assert llm.pull_status()["status"] == "Fertig"
+        assert llm.active_model(cfg) == "qwen2.5:7b-instruct"    # nach dem Laden wird das empfohlene genommen
+    finally:
+        fake.close()
+        llm._cache["t"] = 0
+
+
+def test_llm_titles_and_weak_moment_filter(tmp_path):
+    from clipper import llm
+    from clipper.texts import make_texts
+    from fake_ollama import FakeOllama
+
+    fake = FakeOllama(models=["qwen2.5:7b-instruct"], score=2)
+    try:
+        cfg = deep_merge(DEFAULTS, {"llm": {"url": fake.url}})
+        llm._cache["t"] = 0
+        t = make_texts(cfg, {"name": "S", "url": "https://www.twitch.tv/s", "platform": "twitch"},
+                       {"id": 1, "category": "funny", "transcript": "nein!", "chat_sample": [["KEKW", 5]]})
+        assert t["title"] == "Er fährt direkt in den Pool 😂" and t["llm_score"] == 2
+        assert "#pool" in t["hashtags"]
+        assert fake.requests[-1]["model"] == "qwen2.5:7b-instruct" and fake.requests[-1]["format"] == "json"
+    finally:
+        fake.close()
+        llm._cache["t"] = 0
+
+
+def test_llm_unreachable_falls_back_to_templates():
+    from clipper import llm
+    from clipper.texts import make_texts
+
+    cfg = deep_merge(DEFAULTS, {"llm": {"url": "http://127.0.0.1:9"}})
+    llm._cache["t"] = 0
+    t = make_texts(cfg, {"name": "S", "url": "https://www.twitch.tv/s", "platform": "twitch"},
+                   {"id": 1, "category": "funny"})
+    assert t["title"] and t["llm_score"] is None
+    llm._cache["t"] = 0

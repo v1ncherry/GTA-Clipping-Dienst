@@ -93,7 +93,9 @@ DEFAULTS: dict[str, Any] = {
         "max_per_hour": 4,
     },
     # Autopilot: sehr starke Clips automatisch auf die Standard-Upload-Ziele des Streamers hochladen
-    "autopilot": {"enabled": False, "min_score": 95},
+    "autopilot": {"enabled": False, "min_score": 95,
+                  # zusätzlich: KI-Bewertung mindestens so hoch (nur wenn die KI aktiv ist)
+                  "min_llm_score": 6},
     # Benachrichtigungen aufs Handy: Discord-Webhook und/oder Telegram-Bot
     "notify": {
         "discord_webhook": "",
@@ -206,12 +208,14 @@ DEFAULTS: dict[str, Any] = {
         },
     },
     "llm": {
-        # Lokales LLM über Ollama (kostenlos). Ohne LLM werden Titel aus Vorlagen gebaut.
-        "enabled": False,
+        # Lokales LLM über Ollama (kostenlos) für Titel, Hook und eine zweite Bewertung.
+        # auto = benutzen, sobald Ollama läuft und ein Modell installiert ist | on | off
+        "mode": "auto",
         "url": "http://localhost:11434",
+        # Bevorzugtes Modell; ist es nicht installiert, wird ein anderes installiertes genommen
         "model": "qwen2.5:7b-instruct",
-        # Clips mit LLM-Bewertung darunter werden als "schwach" markiert (0 = aus).
-        "min_score": 0,
+        # Momente, die die KI schlechter als das bewertet (1-10), werden aussortiert (0 = aus)
+        "min_score": 3,
         "timeout": 120,
     },
     "hashtags": ["#gaming", "#clips"],
